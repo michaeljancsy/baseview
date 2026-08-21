@@ -19,6 +19,8 @@ use crate::{
     WindowEvent, WindowInfo, WindowOpenOptions,
 };
 
+use keyboard_types::Modifiers;
+
 use super::keyboard::{from_nsstring, make_modifiers};
 use super::window::WindowState;
 use super::{
@@ -183,6 +185,7 @@ unsafe fn create_view_class() -> &'static Class {
     class.add_method(sel!(otherMouseDragged:), mouse_moved as extern "C" fn(&Object, Sel, id));
 
     class.add_method(sel!(scrollWheel:), scroll_wheel as extern "C" fn(&Object, Sel, id));
+    class.add_method(sel!(magnifyWithEvent:), magnify as extern "C" fn(&Object, Sel, id));
 
     class.add_method(
         sel!(viewDidChangeBackingProperties:),
@@ -427,6 +430,31 @@ extern "C" fn scroll_wheel(this: &Object, _: Sel, event: id) {
     state.trigger_event(Event::Mouse(MouseEvent::WheelScrolled {
         delta,
         modifiers: make_modifiers(modifiers),
+    }));
+}
+
+/// Trackpad pinch, re-encoded as a ctrl-scroll wheel event so it rides the
+/// existing `WheelScrolled` path: consumers with a scroll-to-zoom modifier
+/// convention (e.g. egui's `ctrl || command`) see a zoom with no new event
+/// variants needed. The factor 200.0 makes a consumer using egui's default
+/// scroll-zoom speed (1/200) apply `exp(magnification)` per event — i.e. the
+/// native AppKit `1 + magnification` convention, compounded across the
+/// gesture. The event's real modifiers ride along so a consumer can still
+/// branch on cmd/option held during the pinch.
+extern "C" fn magnify(this: &Object, _: Sel, event: id) {
+    let state = unsafe { WindowState::from_view(this) };
+
+    const MAGNIFY_TO_SCROLL_PX: f64 = 200.0;
+
+    let (magnification, modifiers) =
+        unsafe { (NSEvent::magnification(event), NSEvent::modifierFlags(event)) };
+
+    state.trigger_event(Event::Mouse(MouseEvent::WheelScrolled {
+        delta: ScrollDelta::Pixels {
+            x: 0.0,
+            y: (magnification * MAGNIFY_TO_SCROLL_PX) as f32,
+        },
+        modifiers: make_modifiers(modifiers) | Modifiers::CONTROL,
     }));
 }
 
