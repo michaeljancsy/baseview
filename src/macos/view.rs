@@ -19,7 +19,7 @@ use crate::{
     WindowEvent, WindowInfo, WindowOpenOptions,
 };
 
-use keyboard_types::Modifiers;
+use keyboard_types::{Code, Modifiers};
 
 use super::keyboard::{from_nsstring, make_modifiers};
 use super::window::WindowState;
@@ -83,9 +83,34 @@ macro_rules! add_simple_keyboard_class_method {
             let state = unsafe { WindowState::from_view(this) };
 
             if let Some(key_event) = state.process_native_key_event(event){
-                let status = state.trigger_event(Event::Keyboard(key_event));
+                let code = key_event.code;
 
-                if let EventStatus::Ignored = status {
+                // An embedded plugin editor shares its window, and its host's
+                // key commands, with the host. Two rules keep that honest.
+                //
+                // Command is never handed to the handler. GUI toolkits latch
+                // it from the key event as a scroll-to-zoom modifier, which
+                // then desyncs from focus: it can only be *set* while this
+                // view is first responder, and nothing clears it when focus
+                // leaves. Zoom rides Control instead — that flag arrives
+                // stamped on the scroll event itself and needs no focus at
+                // all, as does the synthetic ctrl-scroll `magnify` sends.
+                //
+                // Everything except the keys the GUI acts on is also passed
+                // up the responder chain, so the host keeps its own key
+                // commands while this view holds first responder. The handler
+                // cannot decide that for us: egui-baseview reports every
+                // event as `Captured`, so the view has to name the keys.
+                let deliver = !matches!(code, Code::MetaLeft | Code::MetaRight);
+                let consumed = matches!(code, Code::ArrowLeft | Code::ArrowRight);
+
+                let status = if deliver {
+                    state.trigger_event(Event::Keyboard(key_event))
+                } else {
+                    EventStatus::Ignored
+                };
+
+                if !consumed || matches!(status, EventStatus::Ignored) {
                     unsafe {
                         let superclass = msg_send![this, superclass];
 
@@ -214,7 +239,7 @@ unsafe fn create_view_class() -> &'static Class {
         handle_notification as extern "C" fn(&Object, Sel, id),
     );
 
-    add_mouse_button_class_method!(class, mouseDown, ButtonPressed, MouseButton::Left);
+    class.add_method(sel!(mouseDown:), mouse_down as extern "C" fn(&Object, Sel, id));
     add_mouse_button_class_method!(class, mouseUp, ButtonReleased, MouseButton::Left);
     add_mouse_button_class_method!(class, rightMouseDown, ButtonPressed, MouseButton::Right);
     add_mouse_button_class_method!(class, rightMouseUp, ButtonReleased, MouseButton::Right);
@@ -455,6 +480,38 @@ extern "C" fn magnify(this: &Object, _: Sel, event: id) {
             y: (magnification * MAGNIFY_TO_SCROLL_PX) as f32,
         },
         modifiers: make_modifiers(modifiers) | Modifiers::CONTROL,
+    }));
+}
+
+/// Left mouse down, plus the keyboard-focus claim that attaching the view
+/// does not survive on its own. baseview asks to become first responder
+/// exactly once, from `viewWillMoveToWindow:`; a host that keeps first
+/// responder on its own views for key commands (Logic Pro) takes it straight
+/// back, and the embedded GUI then never sees a keystroke — not even the
+/// modifier changes a scroll-to-zoom convention is latched from. Claiming it
+/// on click is the native convention, and costs the host nothing: every key
+/// the GUI does not consume is forwarded back up the responder chain.
+extern "C" fn mouse_down(this: &Object, _: Sel, event: id) {
+    unsafe {
+        let window: id = msg_send![this, window];
+        if window != nil {
+            // Only when it is not already ours: `makeFirstResponder:` on the
+            // current first responder still cycles resign/become, and both
+            // are reported to the handler as focus changes.
+            let first_responder: id = msg_send![window, firstResponder];
+            let is_focused: BOOL = msg_send![this, isEqual: first_responder];
+            if is_focused == NO {
+                let _: BOOL = msg_send![window, makeFirstResponder: this];
+            }
+        }
+    }
+
+    let state = unsafe { WindowState::from_view(this) };
+    let modifiers = unsafe { NSEvent::modifierFlags(event) };
+
+    state.trigger_event(Event::Mouse(ButtonPressed {
+        button: MouseButton::Left,
+        modifiers: make_modifiers(modifiers),
     }));
 }
 
