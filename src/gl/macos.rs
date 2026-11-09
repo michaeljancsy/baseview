@@ -95,7 +95,10 @@ impl GlContext {
 
         view.setWantsBestResolutionOpenGLSurface_(YES);
 
-        let () = msg_send![view, retain];
+        // `alloc` already gave us the one reference `Drop` gives back. An extra `retain`
+        // here used to leave the view (and the context and window-sized drawable it owns)
+        // alive forever after every close: +1 alloc, +1 retain, +1 superview, but only the
+        // superview's release and one release in `Drop`.
         NSOpenGLView::display_(view);
         parent_view.addSubview_(view);
 
@@ -149,6 +152,9 @@ impl Drop for GlContext {
     fn drop(&mut self) {
         unsafe {
             let () = msg_send![self.context, release];
+            // Detach first: the parent view may outlive us, and while it holds the
+            // subview our release below would not be the last one.
+            let () = msg_send![self.view, removeFromSuperview];
             let () = msg_send![self.view, release];
         }
     }
