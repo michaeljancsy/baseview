@@ -95,7 +95,10 @@ impl GlContext {
 
         view.setWantsBestResolutionOpenGLSurface_(YES);
 
-        let () = msg_send![view, retain];
+        // No extra `retain` here: `alloc` already gives this context its own reference (released
+        // in `Drop`), and `addSubview_` gives the parent view its own. An extra one was never
+        // released, so every closed window kept its NSOpenGLView, its context and its
+        // screen-sized drawing buffers alive for the life of the host process.
         NSOpenGLView::display_(view);
         parent_view.addSubview_(view);
 
@@ -148,6 +151,10 @@ impl GlContext {
 impl Drop for GlContext {
     fn drop(&mut self) {
         unsafe {
+            // Let go of the drawing buffers now rather than whenever the view finally goes, and
+            // take the view out of its parent so nothing else holds it.
+            let () = msg_send![self.context, clearDrawable];
+            let () = msg_send![self.view, removeFromSuperview];
             let () = msg_send![self.context, release];
             let () = msg_send![self.view, release];
         }
