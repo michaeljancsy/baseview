@@ -156,6 +156,14 @@ pub enum EventStatus {
     /// DAW functionality for playing piano keys with the keyboard while a
     /// plugin window is in focus.
     Ignored,
+    /// The window used this key, so the platform must not get it as well.
+    ///
+    /// On macOS a key the handler reports as [`EventStatus::Captured`] still
+    /// goes on to the host unless it is Left or Right, because some handlers
+    /// (egui-baseview among them) answer `Captured` to every event. A handler
+    /// that knows which keys it uses answers `Consumed` for those and
+    /// `Ignored` for the rest. Elsewhere this means the same as `Captured`.
+    Consumed,
     /// We are prepared to handle the data in the drag and dropping will
     /// result in [DropEffect]
     AcceptDrop(DropEffect),

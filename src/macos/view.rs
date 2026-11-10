@@ -54,12 +54,15 @@ macro_rules! add_simple_mouse_class_method {
 }
 
 /// Similar to [add_simple_mouse_class_method!], but this creates its own event object for the
-/// press/release event and adds the active modifier keys to that event.
+/// press/release event and adds the active modifier keys to that event. The pointer's position
+/// goes first, as a move (see [move_to_event]).
 macro_rules! add_mouse_button_class_method {
     ($class:ident, $sel:ident, $event_ty:ident, $button:expr) => {
         #[allow(non_snake_case)]
         extern "C" fn $sel(this: &Object, _: Sel, event: id){
             let state = unsafe { WindowState::from_view(this) };
+
+            move_to_event(&state, this, event);
 
             let modifiers = unsafe { NSEvent::modifierFlags(event) };
 
@@ -98,11 +101,14 @@ macro_rules! add_simple_keyboard_class_method {
                 //
                 // Everything except the keys the GUI acts on is also passed
                 // up the responder chain, so the host keeps its own key
-                // commands while this view holds first responder. The handler
-                // cannot decide that for us: egui-baseview reports every
-                // event as `Captured`, so the view has to name the keys.
+                // commands while this view holds first responder. A handler
+                // that knows which keys it uses says so with `Consumed` (keep
+                // the key) or `Ignored` (pass it on). `Captured` can't be
+                // trusted for that, since egui-baseview reports every event
+                // as `Captured`, so for it the view names the keys: only Left
+                // and Right stay.
                 let deliver = !matches!(code, Code::MetaLeft | Code::MetaRight);
-                let consumed = matches!(code, Code::ArrowLeft | Code::ArrowRight);
+                let named = matches!(code, Code::ArrowLeft | Code::ArrowRight);
 
                 let status = if deliver {
                     state.trigger_event(Event::Keyboard(key_event))
@@ -110,7 +116,13 @@ macro_rules! add_simple_keyboard_class_method {
                     EventStatus::Ignored
                 };
 
-                if !consumed || matches!(status, EventStatus::Ignored) {
+                let keep = match status {
+                    EventStatus::Consumed => true,
+                    EventStatus::Ignored => false,
+                    _ => named,
+                };
+
+                if !keep {
                     unsafe {
                         let superclass = msg_send![this, superclass];
 
@@ -421,6 +433,19 @@ extern "C" fn update_tracking_areas(this: &Object, _self: Sel, _: id) {
 extern "C" fn mouse_moved(this: &Object, _sel: Sel, event: id) {
     let state = unsafe { WindowState::from_view(this) };
 
+    move_to_event(&state, this, event);
+}
+
+/// Sends the pointer's position in a mouse event as a `CursorMoved`.
+///
+/// Button events carry no position, so a handler places a click wherever the
+/// last move left the pointer. That breaks whenever no move came first: the
+/// tracking area only reports moves while this process is the active app, so
+/// a plugin hosted in a separate process (Logic Pro's) sees none until it is
+/// clicked, and after a `CursorLeft` a handler such as egui-baseview has no
+/// position at all and drops the click. So every button event is preceded by
+/// a move to the event's own position.
+fn move_to_event(state: &WindowState, this: &Object, event: id) {
     let point: NSPoint = unsafe {
         let point = NSEvent::locationInWindow(event);
 
@@ -507,6 +532,9 @@ extern "C" fn mouse_down(this: &Object, _: Sel, event: id) {
     }
 
     let state = unsafe { WindowState::from_view(this) };
+
+    move_to_event(&state, this, event);
+
     let modifiers = unsafe { NSEvent::modifierFlags(event) };
 
     state.trigger_event(Event::Mouse(ButtonPressed {
