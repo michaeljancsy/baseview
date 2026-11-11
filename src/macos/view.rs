@@ -201,6 +201,11 @@ unsafe fn create_view_class() -> &'static Class {
         sel!(acceptsFirstMouse:),
         accepts_first_mouse as extern "C" fn(&Object, Sel, id) -> BOOL,
     );
+    class.add_method(sel!(hitTest:), hit_test as extern "C" fn(&Object, Sel, NSPoint) -> id);
+    class.add_method(
+        sel!(mouseDownCanMoveWindow),
+        property_no as extern "C" fn(&Object, Sel) -> BOOL,
+    );
 
     class.add_method(
         sel!(windowShouldClose:),
@@ -279,6 +284,34 @@ extern "C" fn property_no(_this: &Object, _sel: Sel) -> BOOL {
 
 extern "C" fn accepts_first_mouse(_this: &Object, _sel: Sel, _event: id) -> BOOL {
     YES
+}
+
+/// A point over the OpenGL view belongs to this view.
+///
+/// With the `opengl` feature the drawing goes into an `NSOpenGLView` laid
+/// over this view's whole frame, so AppKit hit-tests every click to it, not
+/// to this view. That view only shows pixels, and it answers AppKit's stock
+/// NO to `acceptsFirstMouse:`. So when the window was not key, as after a
+/// click in a host's own window, the first click on the editor only brought
+/// the window forward and never reached the handler. Mouse events landed here
+/// anyway through the responder chain, so taking the hit changes nothing else,
+/// and `mouseDownCanMoveWindow` keeps the opaque OpenGL view's NO, so a click
+/// on the editor still never drags a host window that moves by its
+/// background.
+extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> id {
+    unsafe {
+        let superclass = msg_send![this, superclass];
+        let hit: id = msg_send![super(this, superclass), hitTest: point];
+
+        if hit != nil {
+            let is_gl_view: BOOL = msg_send![hit, isKindOfClass: class!(NSOpenGLView)];
+            if is_gl_view == YES {
+                return this as *const Object as id;
+            }
+        }
+
+        hit
+    }
 }
 
 extern "C" fn become_first_responder(this: &Object, _sel: Sel) -> BOOL {
