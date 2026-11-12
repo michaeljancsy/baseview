@@ -5,8 +5,8 @@ use std::ptr;
 use std::rc::Rc;
 
 use cocoa::appkit::{
-    NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered,
-    NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
+    NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered, NSEvent,
+    NSEventType, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
@@ -269,6 +269,7 @@ impl<'a> Window<'a> {
             frame_timer: Cell::new(None),
             window_info: Cell::new(window_info),
             deferred_events: RefCell::default(),
+            offered_key: Cell::new(None),
         });
 
         let window_state_ptr = Rc::into_raw(Rc::clone(&window_state));
@@ -365,6 +366,10 @@ pub(super) struct WindowState {
 
     /// Events that will be triggered at the end of `window_handler`'s borrow.
     deferred_events: RefCell<VecDeque<Event>>,
+
+    /// The key press last handed to the handler as a key equivalent and not
+    /// kept, by its time and key code, so its `keyDown:` passes it straight on.
+    offered_key: Cell<Option<(f64, u16)>>,
 }
 
 impl WindowState {
@@ -419,6 +424,27 @@ impl WindowState {
 
     pub(super) fn process_native_key_event(&self, event: *mut Object) -> Option<KeyboardEvent> {
         self.keyboard_state.process_native_event(event)
+    }
+
+    /// Notes a key press handed to the handler as a key equivalent and not kept.
+    pub(super) fn offer_key(&self, event: id) {
+        self.offered_key.set(Some(Self::key_press(event)));
+    }
+
+    /// Whether this press was already handed to the handler as a key equivalent.
+    pub(super) fn was_offered(&self, event: id) -> bool {
+        self.offered_key.get() == Some(Self::key_press(event))
+    }
+
+    /// Whether this press was already handed to the handler as a key equivalent,
+    /// forgetting it either way.
+    pub(super) fn take_offered_key(&self, event: id) -> bool {
+        let is_key_down = unsafe { NSEvent::eventType(event) } == NSEventType::NSKeyDown;
+        is_key_down && self.offered_key.take() == Some(Self::key_press(event))
+    }
+
+    fn key_press(event: id) -> (f64, u16) {
+        unsafe { (NSEvent::timestamp(event), NSEvent::keyCode(event)) }
     }
 
     unsafe fn setup_timer(window_state_ptr: *const WindowState) {

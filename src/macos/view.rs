@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use cocoa::appkit::{NSEvent, NSFilenamesPboardType, NSView, NSWindow};
+use cocoa::appkit::{NSEvent, NSEventType, NSFilenamesPboardType, NSView, NSWindow};
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSArray, NSPoint, NSRect, NSSize, NSUInteger};
 
@@ -19,7 +19,7 @@ use crate::{
     WindowEvent, WindowInfo, WindowOpenOptions,
 };
 
-use keyboard_types::{Code, Modifiers};
+use keyboard_types::{Code, KeyboardEvent, Modifiers};
 
 use super::keyboard::{from_nsstring, make_modifiers};
 use super::window::WindowState;
@@ -85,49 +85,22 @@ macro_rules! add_simple_keyboard_class_method {
         extern "C" fn $sel(this: &Object, _: Sel, event: id){
             let state = unsafe { WindowState::from_view(this) };
 
-            if let Some(key_event) = state.process_native_key_event(event){
-                let code = key_event.code;
+            // A press the handler already turned down when it came as a key
+            // equivalent (see `perform_key_equivalent`) goes straight on, so the
+            // handler never gets the same press twice.
+            let keep = if state.take_offered_key(event) {
+                false
+            } else if let Some(key_event) = state.process_native_key_event(event) {
+                handler_keeps(&state, key_event)
+            } else {
+                return;
+            };
 
-                // An embedded plugin editor shares its window, and its host's
-                // key commands, with the host. Two rules keep that honest.
-                //
-                // Command is never handed to the handler. GUI toolkits latch
-                // it from the key event as a scroll-to-zoom modifier, which
-                // then desyncs from focus: it can only be *set* while this
-                // view is first responder, and nothing clears it when focus
-                // leaves. Zoom rides Control instead — that flag arrives
-                // stamped on the scroll event itself and needs no focus at
-                // all, as does the synthetic ctrl-scroll `magnify` sends.
-                //
-                // Everything except the keys the GUI acts on is also passed
-                // up the responder chain, so the host keeps its own key
-                // commands while this view holds first responder. A handler
-                // that knows which keys it uses says so with `Consumed` (keep
-                // the key) or `Ignored` (pass it on). `Captured` can't be
-                // trusted for that, since egui-baseview reports every event
-                // as `Captured`, so for it the view names the keys: only Left
-                // and Right stay.
-                let deliver = !matches!(code, Code::MetaLeft | Code::MetaRight);
-                let named = matches!(code, Code::ArrowLeft | Code::ArrowRight);
+            if !keep {
+                unsafe {
+                    let superclass = msg_send![this, superclass];
 
-                let status = if deliver {
-                    state.trigger_event(Event::Keyboard(key_event))
-                } else {
-                    EventStatus::Ignored
-                };
-
-                let keep = match status {
-                    EventStatus::Consumed => true,
-                    EventStatus::Ignored => false,
-                    _ => named,
-                };
-
-                if !keep {
-                    unsafe {
-                        let superclass = msg_send![this, superclass];
-
-                        let () = msg_send![super(this, superclass), $sel:event];
-                    }
+                    let () = msg_send![super(this, superclass), $sel:event];
                 }
             }
         }
@@ -137,6 +110,43 @@ macro_rules! add_simple_keyboard_class_method {
             $sel as extern "C" fn(&Object, Sel, id),
         );
     };
+}
+
+/// Hands a key event to the handler, and answers whether the view keeps it
+/// from the host.
+///
+/// An embedded plugin editor shares its window, and its host's key commands,
+/// with the host. Two rules keep that honest.
+///
+/// Command is never handed to the handler. GUI toolkits latch it from the key
+/// event as a scroll-to-zoom modifier, which then desyncs from focus: it can
+/// only be *set* while this view is first responder, and nothing clears it
+/// when focus leaves. Zoom rides Control instead — that flag arrives stamped
+/// on the scroll event itself and needs no focus at all, as does the
+/// synthetic ctrl-scroll `magnify` sends.
+///
+/// Everything except the keys the GUI acts on is also passed up the responder
+/// chain, so the host keeps its own key commands while this view holds first
+/// responder. A handler that knows which keys it uses says so with `Consumed`
+/// (keep the key) or `Ignored` (pass it on). `Captured` can't be trusted for
+/// that, since egui-baseview reports every event as `Captured`, so for it the
+/// view names the keys: only Left and Right stay.
+fn handler_keeps(state: &WindowState, key_event: KeyboardEvent) -> bool {
+    let code = key_event.code;
+    let deliver = !matches!(code, Code::MetaLeft | Code::MetaRight);
+    let named = matches!(code, Code::ArrowLeft | Code::ArrowRight);
+
+    let status = if deliver {
+        state.trigger_event(Event::Keyboard(key_event))
+    } else {
+        EventStatus::Ignored
+    };
+
+    match status {
+        EventStatus::Consumed => true,
+        EventStatus::Ignored => false,
+        _ => named,
+    }
 }
 
 unsafe fn register_notification(observer: id, notification_name: id, object: id) {
@@ -265,6 +275,10 @@ unsafe fn create_view_class() -> &'static Class {
     add_simple_mouse_class_method!(class, mouseEntered, MouseEvent::CursorEntered);
     add_simple_mouse_class_method!(class, mouseExited, MouseEvent::CursorLeft);
 
+    class.add_method(
+        sel!(performKeyEquivalent:),
+        perform_key_equivalent as extern "C" fn(&Object, Sel, id) -> BOOL,
+    );
     add_simple_keyboard_class_method!(class, keyDown);
     add_simple_keyboard_class_method!(class, keyUp);
     add_simple_keyboard_class_method!(class, flagsChanged);
@@ -335,6 +349,56 @@ extern "C" fn resign_first_responder(this: &Object, _sel: Sel) -> BOOL {
     let state = unsafe { WindowState::from_view(this) };
     state.trigger_deferrable_event(Event::Window(WindowEvent::Unfocused));
     YES
+}
+
+/// Claims a key press the handler keeps before the host's menus can take it.
+///
+/// AppKit offers a key press to the key window's views as a key equivalent,
+/// then to the application's menus, and only then sends `keyDown:` to the
+/// first responder. So a key the host's menus hold ran the host's command even
+/// while this view was first responder and its handler acted on the key: in
+/// Logic Pro, Command-Z undid in Logic, R started recording and Return moved
+/// the playhead, all over a plugin that uses those keys. While this view is
+/// its window's first responder the press goes to the handler here instead,
+/// and the view claims it if the handler keeps it (see [handler_keeps]). A
+/// press the handler doesn't keep goes on to the host's menus and, if none
+/// takes it, to `keyDown:`, which passes it on without handing it over again,
+/// so a host's other Command shortcuts work as before.
+extern "C" fn perform_key_equivalent(this: &Object, _sel: Sel, event: id) -> BOOL {
+    unsafe {
+        let window: id = msg_send![this, window];
+        let ours = window != nil
+            && NSEvent::eventType(event) == NSEventType::NSKeyDown
+            && {
+                // Aimed at this window: it is the key window, or the press
+                // names it.
+                let is_key: BOOL = msg_send![window, isKeyWindow];
+                let number: cocoa::foundation::NSInteger = msg_send![window, windowNumber];
+                is_key == YES || NSEvent::windowNumber(event) == number
+            }
+            && {
+                let first_responder: id = msg_send![window, firstResponder];
+                let is_first: BOOL = msg_send![this, isEqual: first_responder];
+                is_first == YES
+            };
+
+        if ours {
+            let state = WindowState::from_view(this);
+
+            // AppKit may offer the same press more than once.
+            if !state.was_offered(event) {
+                if let Some(key_event) = state.process_native_key_event(event) {
+                    if handler_keeps(&state, key_event) {
+                        return YES;
+                    }
+                    state.offer_key(event);
+                }
+            }
+        }
+
+        let superclass = msg_send![this, superclass];
+        msg_send![super(this, superclass), performKeyEquivalent: event]
+    }
 }
 
 extern "C" fn window_should_close(this: &Object, _: Sel, _sender: id) -> BOOL {
