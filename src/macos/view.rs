@@ -354,8 +354,8 @@ extern "C" fn dealloc(this: &mut Object, _sel: Sel) {
         let superclass = msg_send![this, superclass];
         let () = msg_send![super(this, superclass), dealloc];
 
-        // Delete class
-        ::objc::runtime::objc_disposeClassPair(class);
+        // PROBE: the class is kept, never deleted, so a late message to a freed view still finds it.
+        let _ = class;
     }
 }
 
