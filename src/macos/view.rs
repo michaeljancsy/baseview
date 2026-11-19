@@ -425,6 +425,26 @@ extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id
         let tracking_area_count = NSArray::count(tracking_areas);
 
         if new_window == nil {
+            // Give up keyboard focus through the window's own call before leaving it. On its own,
+            // AppKit hands focus back to the window without that call, so a host that keeps track
+            // of focus through it (Pro Tools does) still points at this view after it is freed,
+            // and crashes when it lets go of its own view.
+            let old_window: id = msg_send![this, window];
+            if old_window != nil {
+                let responder: id = msg_send![old_window, firstResponder];
+                let is_view: BOOL = if responder == nil {
+                    NO
+                } else {
+                    msg_send![responder, isKindOfClass: class!(NSView)]
+                };
+                if is_view == YES {
+                    let inside: BOOL = msg_send![responder, isDescendantOf: this];
+                    if inside == YES {
+                        let _: BOOL = msg_send![old_window, makeFirstResponder: nil];
+                    }
+                }
+            }
+
             if tracking_area_count != 0 {
                 let tracking_area = NSArray::objectAtIndex(tracking_areas, 0);
 
