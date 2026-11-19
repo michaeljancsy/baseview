@@ -156,6 +156,8 @@ pub(super) unsafe fn create_view(window_options: &WindowOpenOptions) -> id {
         registerForDraggedTypes: NSArray::arrayWithObjects(nil, &[NSFilenamesPboardType])
     ];
 
+    add_tracking_area(&*view);
+
     view
 }
 
@@ -198,10 +200,6 @@ unsafe fn create_view_class() -> &'static Class {
     class.add_method(
         sel!(viewWillMoveToWindow:),
         view_will_move_to_window as extern "C" fn(&Object, Sel, id),
-    );
-    class.add_method(
-        sel!(updateTrackingAreas:),
-        update_tracking_areas as extern "C" fn(&Object, Sel, id),
     );
 
     class.add_method(sel!(mouseMoved:), mouse_moved as extern "C" fn(&Object, Sel, id));
@@ -341,13 +339,15 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel, _: id) {
     }
 }
 
-/// Init/reinit tracking area
+/// The view's one tracking area, made with the view and never touched again. It follows the
+/// view's visible rectangle by itself (`NSTrackingInVisibleRect`), in whatever window the view is,
+/// so nothing has to update or replace it, and it goes when the view goes. The view holds the only
+/// reference, through AppKit's list. It never takes out or releases any other area: AppKit and
+/// hosts add tracking areas to views too.
 ///
 /// Info:
 /// https://developer.apple.com/documentation/appkit/nstrackingarea
-/// https://developer.apple.com/documentation/appkit/nstrackingarea/options
-/// https://developer.apple.com/documentation/appkit/nstrackingareaoptions
-unsafe fn reinit_tracking_area(this: &Object, tracking_area: *mut Object) {
+unsafe fn add_tracking_area(this: &Object) {
     let options: usize = {
         let mouse_entered_and_exited = 0x01;
         let tracking_mouse_moved = 0x02;
@@ -365,38 +365,23 @@ unsafe fn reinit_tracking_area(this: &Object, tracking_area: *mut Object) {
     };
 
     let bounds: NSRect = msg_send![this, bounds];
-
-    *tracking_area = msg_send![tracking_area,
+    let class = Class::get("NSTrackingArea").unwrap();
+    let tracking_area: id = msg_send![class, alloc];
+    let tracking_area: id = msg_send![tracking_area,
         initWithRect:bounds
         options:options
         owner:this
         userInfo:nil
     ];
+    let _: () = msg_send![this, addTrackingArea: tracking_area];
+    let _: () = msg_send![tracking_area, release];
 }
 
 extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id) {
     unsafe {
-        let tracking_areas: *mut Object = msg_send![this, trackingAreas];
-        let tracking_area_count = NSArray::count(tracking_areas);
-
-        if new_window == nil {
-            if tracking_area_count != 0 {
-                let tracking_area = NSArray::objectAtIndex(tracking_areas, 0);
-
-                let _: () = msg_send![this, removeTrackingArea: tracking_area];
-                let _: () = msg_send![tracking_area, release];
-            }
-        } else {
-            if tracking_area_count == 0 {
-                let class = Class::get("NSTrackingArea").unwrap();
-
-                let tracking_area: *mut Object = msg_send![class, alloc];
-
-                reinit_tracking_area(this, tracking_area);
-
-                let _: () = msg_send![this, addTrackingArea: tracking_area];
-            }
-
+        // The view's one tracking area (made in `create_view`) stays through moves between
+        // windows and is never removed or released here.
+        if new_window != nil {
             let _: () = msg_send![new_window, setAcceptsMouseMovedEvents: YES];
             let _: () = msg_send![new_window, makeFirstResponder: this];
         }
@@ -406,15 +391,6 @@ extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id
         let superclass = msg_send![this, superclass];
 
         let () = msg_send![super(this, superclass), viewWillMoveToWindow: new_window];
-    }
-}
-
-extern "C" fn update_tracking_areas(this: &Object, _self: Sel, _: id) {
-    unsafe {
-        let tracking_areas: *mut Object = msg_send![this, trackingAreas];
-        let tracking_area = NSArray::objectAtIndex(tracking_areas, 0);
-
-        reinit_tracking_area(this, tracking_area);
     }
 }
 
