@@ -97,7 +97,7 @@ impl WindowInner {
 
                 // Ensure that the NSView is detached from the parent window
                 self.ns_view.removeFromSuperview();
-                let () = msg_send![self.ns_view as id, release];
+                // PROBE: our own reference is kept, never released, so the view is never freed.
 
                 // If in non-parented mode, we want to also quit the app altogether
                 let app = self.ns_app.take();
