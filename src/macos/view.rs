@@ -30,6 +30,9 @@ use super::{
 
 /// Name of the field used to store the `WindowState` pointer.
 pub(super) const BASEVIEW_STATE_IVAR: &str = "baseview_state";
+/// The one tracking area this view made, which only it holds (through AppKit's list of the view's
+/// tracking areas). Kept to know which area is its own: AppKit and hosts add areas to views too.
+const TRACKING_AREA_IVAR: &str = "baseview_tracking_area";
 
 #[link(name = "AppKit", kind = "framework")]
 extern "C" {
@@ -168,6 +171,8 @@ pub(super) unsafe fn create_view(window_options: &WindowOpenOptions) -> id {
         registerForDraggedTypes: NSArray::arrayWithObjects(nil, &[NSFilenamesPboardType])
     ];
 
+    replace_tracking_area(&*view);
+
     view
 }
 
@@ -216,10 +221,7 @@ unsafe fn create_view_class() -> &'static Class {
         sel!(viewWillMoveToWindow:),
         view_will_move_to_window as extern "C" fn(&Object, Sel, id),
     );
-    class.add_method(
-        sel!(updateTrackingAreas:),
-        update_tracking_areas as extern "C" fn(&Object, Sel, id),
-    );
+    class.add_method(sel!(updateTrackingAreas), update_tracking_areas as extern "C" fn(&Object, Sel));
 
     class.add_method(sel!(mouseMoved:), mouse_moved as extern "C" fn(&Object, Sel, id));
     class.add_method(sel!(mouseDragged:), mouse_moved as extern "C" fn(&Object, Sel, id));
@@ -270,6 +272,7 @@ unsafe fn create_view_class() -> &'static Class {
     add_simple_keyboard_class_method!(class, flagsChanged);
 
     class.add_ivar::<*mut c_void>(BASEVIEW_STATE_IVAR);
+    class.add_ivar::<*mut c_void>(TRACKING_AREA_IVAR);
 
     class.register()
 }
@@ -386,13 +389,14 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel, _: id) {
     }
 }
 
-/// Init/reinit tracking area
+/// Takes out the tracking area this view made, if any, and adds a new one for its bounds. The view
+/// holds the only reference to it, through AppKit's list, so taking it out frees it, exactly once.
+/// Areas the view didn't make are left alone.
 ///
 /// Info:
 /// https://developer.apple.com/documentation/appkit/nstrackingarea
-/// https://developer.apple.com/documentation/appkit/nstrackingarea/options
-/// https://developer.apple.com/documentation/appkit/nstrackingareaoptions
-unsafe fn reinit_tracking_area(this: &Object, tracking_area: *mut Object) {
+/// https://developer.apple.com/documentation/appkit/nsview/updatetrackingareas()
+unsafe fn replace_tracking_area(this: &Object) {
     let options: usize = {
         let mouse_entered_and_exited = 0x01;
         let tracking_mouse_moved = 0x02;
@@ -409,21 +413,31 @@ unsafe fn reinit_tracking_area(this: &Object, tracking_area: *mut Object) {
             | tracking_enabled_during_mouse_drag
     };
 
-    let bounds: NSRect = msg_send![this, bounds];
+    let old: *mut c_void = *this.get_ivar(TRACKING_AREA_IVAR);
+    if !old.is_null() {
+        let _: () = msg_send![this, removeTrackingArea: old as id];
+    }
 
-    *tracking_area = msg_send![tracking_area,
+    let bounds: NSRect = msg_send![this, bounds];
+    let class = Class::get("NSTrackingArea").unwrap();
+    let tracking_area: id = msg_send![class, alloc];
+    let tracking_area: id = msg_send![tracking_area,
         initWithRect:bounds
         options:options
         owner:this
         userInfo:nil
     ];
+    let _: () = msg_send![this, addTrackingArea: tracking_area];
+    let _: () = msg_send![tracking_area, release];
+
+    let this = this as *const Object as *mut Object;
+    (*this).set_ivar(TRACKING_AREA_IVAR, tracking_area as *mut c_void);
 }
 
 extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id) {
     unsafe {
-        let tracking_areas: *mut Object = msg_send![this, trackingAreas];
-        let tracking_area_count = NSArray::count(tracking_areas);
-
+        // The tracking area stays through moves between windows: it tracks the view's visible
+        // rectangle wherever the view is, and goes with the view.
         if new_window == nil {
             // Give up keyboard focus through the window's own call before leaving it. On its own,
             // AppKit hands focus back to the window without that call, so a host that keeps track
@@ -445,23 +459,7 @@ extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id
                 }
             }
 
-            if tracking_area_count != 0 {
-                let tracking_area = NSArray::objectAtIndex(tracking_areas, 0);
-
-                let _: () = msg_send![this, removeTrackingArea: tracking_area];
-                let _: () = msg_send![tracking_area, release];
-            }
         } else {
-            if tracking_area_count == 0 {
-                let class = Class::get("NSTrackingArea").unwrap();
-
-                let tracking_area: *mut Object = msg_send![class, alloc];
-
-                reinit_tracking_area(this, tracking_area);
-
-                let _: () = msg_send![this, addTrackingArea: tracking_area];
-            }
-
             let _: () = msg_send![new_window, setAcceptsMouseMovedEvents: YES];
             let _: () = msg_send![new_window, makeFirstResponder: this];
         }
@@ -474,12 +472,13 @@ extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id
     }
 }
 
-extern "C" fn update_tracking_areas(this: &Object, _self: Sel, _: id) {
+/// AppKit asks for this whenever the view's tracking areas may need recalculating.
+extern "C" fn update_tracking_areas(this: &Object, _self: Sel) {
     unsafe {
-        let tracking_areas: *mut Object = msg_send![this, trackingAreas];
-        let tracking_area = NSArray::objectAtIndex(tracking_areas, 0);
+        replace_tracking_area(this);
 
-        reinit_tracking_area(this, tracking_area);
+        let superclass = msg_send![this, superclass];
+        let () = msg_send![super(this, superclass), updateTrackingAreas];
     }
 }
 
