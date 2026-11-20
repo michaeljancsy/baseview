@@ -40,7 +40,8 @@ extern "C" {
 macro_rules! add_simple_mouse_class_method {
     ($class:ident, $sel:ident, $event:expr) => {
         #[allow(non_snake_case)]
-        extern "C" fn $sel(this: &Object, _: Sel, _: id){
+        extern "C" fn $sel(this: &Object, _: Sel, event: id){
+            super::event_log::log(this, stringify!($sel), event);
             let state = unsafe { WindowState::from_view(this) };
 
             state.trigger_event(Event::Mouse($event));
@@ -60,6 +61,7 @@ macro_rules! add_mouse_button_class_method {
     ($class:ident, $sel:ident, $event_ty:ident, $button:expr) => {
         #[allow(non_snake_case)]
         extern "C" fn $sel(this: &Object, _: Sel, event: id){
+            super::event_log::log(this, stringify!($sel), event);
             let state = unsafe { WindowState::from_view(this) };
 
             move_to_event(&state, this, event);
@@ -83,6 +85,7 @@ macro_rules! add_simple_keyboard_class_method {
     ($class:ident, $sel:ident) => {
         #[allow(non_snake_case)]
         extern "C" fn $sel(this: &Object, _: Sel, event: id){
+            super::event_log::log(this, stringify!($sel), event);
             let state = unsafe { WindowState::from_view(this) };
 
             if let Some(key_event) = state.process_native_key_event(event){
@@ -313,6 +316,7 @@ extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> id {
 }
 
 extern "C" fn become_first_responder(this: &Object, _sel: Sel) -> BOOL {
+    super::event_log::log(this, "becomeFirstResponder", nil);
     let state = unsafe { WindowState::from_view(this) };
     let is_key_window = unsafe {
         let window: id = msg_send![this, window];
@@ -330,6 +334,7 @@ extern "C" fn become_first_responder(this: &Object, _sel: Sel) -> BOOL {
 }
 
 extern "C" fn resign_first_responder(this: &Object, _sel: Sel) -> BOOL {
+    super::event_log::log(this, "resignFirstResponder", nil);
     let state = unsafe { WindowState::from_view(this) };
     state.trigger_deferrable_event(Event::Window(WindowEvent::Unfocused));
     YES
@@ -423,6 +428,9 @@ unsafe fn add_tracking_area(this: &Object) {
 }
 
 extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id) {
+    if super::event_log::on() {
+        super::event_log::log(this, &format!("viewWillMoveToWindow {:p}", new_window), nil);
+    }
     unsafe {
         // The tracking area stays through moves between windows (see `add_tracking_area`).
         if new_window == nil {
@@ -460,6 +468,13 @@ extern "C" fn view_will_move_to_window(this: &Object, _self: Sel, new_window: id
 }
 
 extern "C" fn mouse_moved(this: &Object, _sel: Sel, event: id) {
+    // Drags only: plain moves come many times a second and say nothing about a lost release.
+    if super::event_log::on() {
+        let kind: u64 = unsafe { msg_send![event, type] };
+        if kind != 5 {
+            super::event_log::log(this, "mouseDragged", event);
+        }
+    }
     let state = unsafe { WindowState::from_view(this) };
 
     move_to_event(&state, this, event);
@@ -491,6 +506,7 @@ fn move_to_event(state: &WindowState, this: &Object, event: id) {
 }
 
 extern "C" fn scroll_wheel(this: &Object, _: Sel, event: id) {
+    super::event_log::log(this, "scrollWheel", event);
     let state = unsafe { WindowState::from_view(this) };
 
     let delta = unsafe {
@@ -521,6 +537,7 @@ extern "C" fn scroll_wheel(this: &Object, _: Sel, event: id) {
 /// gesture. The event's real modifiers ride along so a consumer can still
 /// branch on cmd/option held during the pinch.
 extern "C" fn magnify(this: &Object, _: Sel, event: id) {
+    super::event_log::log(this, "magnifyWithEvent", event);
     let state = unsafe { WindowState::from_view(this) };
 
     const MAGNIFY_TO_SCROLL_PX: f64 = 200.0;
@@ -546,6 +563,7 @@ extern "C" fn magnify(this: &Object, _: Sel, event: id) {
 /// on click is the native convention, and costs the host nothing: every key
 /// the GUI does not consume is forwarded back up the responder chain.
 extern "C" fn mouse_down(this: &Object, _: Sel, event: id) {
+    super::event_log::log(this, "mouseDown", event);
     unsafe {
         let window: id = msg_send![this, window];
         if window != nil {
