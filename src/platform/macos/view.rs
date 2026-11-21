@@ -485,24 +485,14 @@ impl ViewImpl for BaseviewView {
     }
 
     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>) {
-        let tracking_areas = this.view.trackingAreas();
-
-        match new_window {
-            None => {
-                if tracking_areas.count() > 0 {
-                    let tracking_area = tracking_areas.objectAtIndex(0);
-                    this.view.removeTrackingArea(&tracking_area);
-                }
-            }
-            Some(new_window) => {
-                if tracking_areas.is_empty() {
-                    let tracking_area = new_tracking_area(this.view);
-                    this.view.addTrackingArea(&tracking_area);
-                }
-
-                new_window.setAcceptsMouseMovedEvents(true);
-                new_window.makeFirstResponder(Some(this.view));
-            }
+        // The view's own tracking area follows its visible rectangle by itself
+        // (`InVisibleRect`), so leaving a window needs nothing. Only the view's own area is ever
+        // touched: hosts add tracking areas to the view too, and taking out the first one in the
+        // list took out Pro Tools' (ConjurePluginKit, the 0.3 fork's ca7eefa).
+        if let Some(new_window) = new_window {
+            ensure_own_tracking_area(this.view);
+            new_window.setAcceptsMouseMovedEvents(true);
+            new_window.makeFirstResponder(Some(this.view));
         }
 
         unsafe {
@@ -511,15 +501,8 @@ impl ViewImpl for BaseviewView {
     }
 
     fn update_tracking_areas(this: ViewRef<Self>) {
-        let tracking_areas = this.view.trackingAreas();
-        if tracking_areas.count() > 0 {
-            let tracking_area = tracking_areas.objectAtIndex(0);
-            this.view.removeTrackingArea(&tracking_area);
-        }
-
-        let tracking_area = new_tracking_area(this.view);
-
-        this.view.addTrackingArea(&tracking_area);
+        // `InVisibleRect` keeps the view's own area right; others' areas are theirs.
+        ensure_own_tracking_area(this.view);
     }
 
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent) {
@@ -798,6 +781,18 @@ impl ViewImpl for BaseviewView {
                 }
             }
         }
+    }
+}
+
+/// Adds the view's own tracking area if it has none, and touches no other.
+fn ensure_own_tracking_area(view: &NSView) {
+    let own = view.trackingAreas().iter().any(|area| {
+        // SAFETY: reading the area's owner.
+        let owner = unsafe { area.owner() };
+        owner.is_some_and(|o| core::ptr::eq(Retained::as_ptr(&o).cast::<u8>(), (view as *const NSView).cast::<u8>()))
+    });
+    if !own {
+        view.addTrackingArea(&new_tracking_area(view));
     }
 }
 
