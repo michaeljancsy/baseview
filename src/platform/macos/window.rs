@@ -212,6 +212,9 @@ pub(crate) struct WindowSharedState {
     pub scale_factor: Cell<f64>,
     pub sizing_strategy: SizingStrategy,
     pub redraw_requested: Cell<bool>,
+    /// Set while baseview resizes its own view, so the `setFrameSize:` that causes isn't taken
+    /// for a change made by someone else.
+    pub resizing: Cell<bool>,
 }
 
 impl WindowSharedState {
@@ -222,6 +225,7 @@ impl WindowSharedState {
             scale_factor: scale_factor.into(),
             sizing_strategy,
             redraw_requested: Cell::new(false),
+            resizing: Cell::new(false),
         }
     }
 }

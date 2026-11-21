@@ -178,6 +178,9 @@ pub trait ViewImpl: Sized {
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent);
     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent);
     fn magnify(this: ViewRef<Self>, event: &NSEvent);
+    /// The view's frame was resized by someone other than baseview: a host that resizes the view
+    /// it was given, for one.
+    fn frame_size_changed(this: ViewRef<Self>);
     fn dragging_entered(
         this: ViewRef<Self>, sender: Option<&ProtocolObject<dyn NSDraggingInfo>>,
     ) -> NSDragOperation;

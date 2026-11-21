@@ -5,7 +5,7 @@ use objc2::ffi::objc_disposeClassPair;
 use objc2::runtime::ClassBuilder;
 use objc2::{msg_send, sel, ClassType};
 use objc2_app_kit::{NSEvent, NSView};
-use objc2_foundation::NSRect;
+use objc2_foundation::{NSRect, NSSize};
 use std::ffi::c_void;
 
 /// # Safety
@@ -93,6 +93,11 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
         class.add_method(
             sel!(magnifyWithEvent:),
             magnify::<V> as extern "C-unwind" fn(_, _, _) -> _,
+        );
+
+        class.add_method(
+            sel!(setFrameSize:),
+            set_frame_size::<V> as extern "C-unwind" fn(_, _, _),
         );
 
         class.add_method(
@@ -206,6 +211,16 @@ extern "C-unwind" fn window_should_close<V: ViewImpl>(
 extern "C-unwind" fn view_did_change_backing_properties<V: ViewImpl>(this: &View<V>, _: Sel) {
     let Some(inner) = this.inner_ref() else { return };
     V::view_did_change_backing_properties(inner, true);
+}
+
+// A host may resize the view it was given (REAPER's VST3 does, as a window shrinks), which would
+// otherwise leave baseview, and so the contents, at the old size.
+extern "C-unwind" fn set_frame_size<V: ViewImpl>(this: &View<V>, _: Sel, size: NSSize) {
+    // SAFETY: Our superclass is NSView
+    let _: () = unsafe { msg_send![super(this, NSView::class()), setFrameSize: size] };
+    event_log::log(this, &format!("setFrameSize {}x{}", size.width, size.height), None);
+    let Some(inner) = this.inner_ref() else { return };
+    V::frame_size_changed(inner);
 }
 
 extern "C-unwind" fn draw_rect<V: ViewImpl>(this: &View<V>, _: Sel, dirty_rect: NSRect) {

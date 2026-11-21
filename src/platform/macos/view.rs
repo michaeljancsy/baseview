@@ -251,7 +251,9 @@ impl BaseviewView {
         // though the size is in fractional pixels.
         let size = NSSize::new(size.width.round(), size.height.round());
 
+        this.inner.state.resizing.set(true);
         this.view.setFrameSize(size);
+        this.inner.state.resizing.set(false);
         this.view.setNeedsDisplay(true);
 
         // When using OpenGL the `NSOpenGLView` needs to be resized separately? Why? Because
@@ -560,6 +562,16 @@ impl ViewImpl for BaseviewView {
     /// (egui: Control-scroll zooms by exp(delta / 200), so 200 x the magnification gives the native
     /// 1 + magnification per event, compounded over the gesture). baseview has no pinch event of its
     /// own, so this needs no new event type. The event's real modifiers ride along.
+    fn frame_size_changed(this: ViewRef<Self>) {
+        // Baseview's own resize carries on from here, and tells the host itself.
+        if this.inner.state.resizing.get() {
+            return;
+        }
+        // Someone else resized the view, the host most likely: the contents follow, and the host,
+        // which did it, isn't asked.
+        Self::view_did_change_backing_properties(this, false);
+    }
+
     fn magnify(this: ViewRef<Self>, event: &NSEvent) {
         let magnification = event.magnification() as f32;
         let mut modifiers = make_modifiers(event.modifierFlags());
