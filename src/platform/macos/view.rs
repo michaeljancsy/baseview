@@ -205,6 +205,25 @@ impl BaseviewView {
         self.display_link_started.set(needed);
     }
 
+    /// Tells the handler where `event` happened, as a pointer move. A press or release says only
+    /// which button, so without this the handler places it where the pointer last moved: a press
+    /// with no move before it (a pen, an automated click, a window opening under a still
+    /// pointer, or after the pointer left and came back without moving inside) landed in the
+    /// wrong place, or nowhere (ConjurePluginKit; the 0.3 fork's "a position for every click").
+    pub(crate) fn place_pointer(this: ViewRef<Self>, event: &NSEvent) {
+        let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
+
+        let position = LogicalPosition { x: point.x, y: point.y };
+
+        Self::trigger_event(
+            this,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: position.to_physical(this.state.scale_factor.get()),
+                modifiers: make_modifiers(event.modifierFlags()),
+            }),
+        );
+    }
+
     pub fn close(this: ViewRef<Self>, from_host: bool) {
         this.state.closed.set(true);
         this.view.removeFromSuperview();
@@ -507,17 +526,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent) {
-        let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
-
-        let position = LogicalPosition { x: point.x, y: point.y };
-
-        Self::trigger_event(
-            this,
-            Event::Mouse(MouseEvent::CursorMoved {
-                position: position.to_physical(this.state.scale_factor.get()),
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
+        Self::place_pointer(this, event);
 
         // SAFETY: Our superclass is NSView
         let _: () = unsafe { msg_send![super(this.view, NSView::class()), mouseMoved: event] };
@@ -662,6 +671,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_down(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonPressed {
@@ -672,6 +682,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_up(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonReleased {
@@ -682,6 +693,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn right_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonPressed {
@@ -692,6 +704,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn right_mouse_up(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonReleased {
@@ -702,6 +715,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn other_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonPressed {
@@ -712,6 +726,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn other_mouse_up(this: ViewRef<Self>, event: &NSEvent) {
+        Self::place_pointer(this, event);
         Self::trigger_event(
             this,
             Event::Mouse(ButtonReleased {
