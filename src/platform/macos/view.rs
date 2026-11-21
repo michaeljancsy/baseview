@@ -809,8 +809,11 @@ fn new_tracking_area(this: &NSView) -> Retained<NSTrackingArea> {
     let options = NSTrackingAreaOptions::MouseEnteredAndExited
         | NSTrackingAreaOptions::MouseMoved
         | NSTrackingAreaOptions::CursorUpdate
-        //| NSTrackingAreaOptions::ActiveInActiveApp
-        | NSTrackingAreaOptions::ActiveInKeyWindow
+        // Always, not only in the key window or the active app: an Audio Unit extension (AUv3)
+        // runs in a process of its own, which is never the active app while the host shows its
+        // view, so the pointer's moves never arrived there and nothing hovered. JUCE uses the
+        // same option for the same reason.
+        | NSTrackingAreaOptions::ActiveAlways
         | NSTrackingAreaOptions::InVisibleRect
         | NSTrackingAreaOptions::EnabledDuringMouseDrag;
 
