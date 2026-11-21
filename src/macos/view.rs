@@ -397,14 +397,18 @@ unsafe fn add_tracking_area(this: &Object) {
         let mouse_entered_and_exited = 0x01;
         let tracking_mouse_moved = 0x02;
         let tracking_cursor_update = 0x04;
-        let tracking_active_in_active_app = 0x40;
+        // Always, not only while this process is the active app: an Audio Unit extension (AUv3)
+        // runs in a process of its own, which is never the active app while the host shows its
+        // view, so the pointer's moves never arrived there and nothing hovered. JUCE uses the
+        // same option for the same reason.
+        let tracking_active_always = 0x80;
         let tracking_in_visible_rect = 0x200;
         let tracking_enabled_during_mouse_drag = 0x400;
 
         mouse_entered_and_exited
             | tracking_mouse_moved
             | tracking_cursor_update
-            | tracking_active_in_active_app
+            | tracking_active_always
             | tracking_in_visible_rect
             | tracking_enabled_during_mouse_drag
     };
