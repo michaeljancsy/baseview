@@ -1,3 +1,4 @@
+pub(crate) mod event_log;
 mod main_thread;
 mod notification_center;
 mod view;

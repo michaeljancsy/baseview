@@ -1,5 +1,5 @@
 use super::*;
-use crate::wrappers::appkit::new_class_name;
+use crate::wrappers::appkit::{event_log, new_class_name};
 use objc2::__framework_prelude::{AnyClass, AnyObject, Bool, Sel};
 use objc2::ffi::objc_disposeClassPair;
 use objc2::runtime::ClassBuilder;
@@ -180,11 +180,13 @@ extern "C-unwind" fn accepts_first_mouse(_this: &NSView, _sel: Sel, _event: &NSE
 }
 
 extern "C-unwind" fn become_first_responder<V: ViewImpl>(this: &View<V>, _sel: Sel) -> Bool {
+    event_log::log(this, "becomeFirstResponder", None);
     let Some(inner) = this.inner_ref() else { return false.into() };
     V::become_first_responder(inner).into()
 }
 
 extern "C-unwind" fn resign_first_responder<V: ViewImpl>(this: &View<V>, _sel: Sel) -> Bool {
+    event_log::log(this, "resignFirstResponder", None);
     let Some(inner) = this.inner_ref() else { return true.into() };
     V::resign_first_responder(inner).into()
 }
@@ -226,6 +228,10 @@ extern "C-unwind" fn hit_test<V: ViewImpl>(
 extern "C-unwind" fn view_will_move_to_window<V: ViewImpl>(
     this: &View<V>, _self: Sel, new_window: Option<&NSWindow>,
 ) {
+    if event_log::on() {
+        let new_window = new_window.map_or(std::ptr::null(), |w| w as *const NSWindow);
+        event_log::log(this, &format!("viewWillMoveToWindow {new_window:p}"), None);
+    }
     let Some(inner) = this.inner_ref() else { return };
     V::view_will_move_to_window(inner, new_window);
 }
@@ -235,12 +241,14 @@ extern "C-unwind" fn update_tracking_areas<V: ViewImpl>(this: &View<V>, _self: S
     V::update_tracking_areas(inner);
 }
 
-extern "C-unwind" fn mouse_moved<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn mouse_moved<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log_drag(this, sel, event);
     let Some(inner) = this.inner_ref() else { return };
     V::mouse_moved(inner, event);
 }
 
-extern "C-unwind" fn scroll_wheel<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn scroll_wheel<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::scroll_wheel(inner, event);
 }
@@ -287,7 +295,8 @@ extern "C-unwind" fn handle_notification<V: ViewImpl>(
     V::handle_notification(inner, notification)
 }
 
-extern "C-unwind" fn mouse_entered<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn mouse_entered<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     // SAFETY: Our superclass is NSView
     let _: () = unsafe { msg_send![super(this, NSView::class()), mouseEntered: event] };
 
@@ -295,7 +304,8 @@ extern "C-unwind" fn mouse_entered<V: ViewImpl>(this: &View<V>, _: Sel, event: &
     V::mouse_entered(inner);
 }
 
-extern "C-unwind" fn mouse_exited<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn mouse_exited<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     // SAFETY: Our superclass is NSView
     let _: () = unsafe { msg_send![super(this, NSView::class()), mouseExited: event] };
 
@@ -303,47 +313,56 @@ extern "C-unwind" fn mouse_exited<V: ViewImpl>(this: &View<V>, _: Sel, event: &N
     V::mouse_exited(inner);
 }
 
-extern "C-unwind" fn key_down<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn key_down<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::key_down(inner, event);
 }
 
-extern "C-unwind" fn key_up<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn key_up<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::key_up(inner, event);
 }
 
-extern "C-unwind" fn flags_changed<V: ViewImpl>(this: &View<V>, _: Sel, event: &NSEvent) {
+extern "C-unwind" fn flags_changed<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::flags_changed(inner, event);
 }
 
-extern "C-unwind" fn mouse_down<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn mouse_down<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::mouse_down(inner, event);
 }
 
-extern "C-unwind" fn mouse_up<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn mouse_up<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::mouse_up(inner, event);
 }
 
-extern "C-unwind" fn right_mouse_down<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn right_mouse_down<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::right_mouse_down(inner, event);
 }
 
-extern "C-unwind" fn right_mouse_up<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn right_mouse_up<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::right_mouse_up(inner, event);
 }
 
-extern "C-unwind" fn other_mouse_down<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn other_mouse_down<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::other_mouse_down(inner, event);
 }
 
-extern "C-unwind" fn other_mouse_up<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+extern "C-unwind" fn other_mouse_up<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::other_mouse_up(inner, event);
 }
