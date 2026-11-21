@@ -18,7 +18,7 @@ use crate::{
 };
 use objc2::__framework_prelude::Retained;
 use objc2::rc::Weak;
-use objc2::runtime::{NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{msg_send, AllocAnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::{
     NSApplication, NSDragOperation, NSDraggingInfo, NSEvent, NSFilenamesPboardType, NSTrackingArea,
@@ -210,6 +210,7 @@ impl BaseviewView {
         this.view.removeFromSuperview();
         this.notification_center_observer.take();
         this.window_handler.destroy();
+        detach_sublayers(this.view);
 
         if let Some(link) = this.display_link.get() {
             link.setPaused(true);
@@ -784,11 +785,31 @@ impl ViewImpl for BaseviewView {
     }
 }
 
+/// Takes every sublayer off the view's layer, once the handler, and with it whatever drew into
+/// the view, is gone. wgpu draws into a layer (raw-window-metal's) that it adds as a sublayer, and
+/// that layer observes the view's layer, stopping only when it is freed. Left attached, it is freed
+/// only after the view's layer, and the two observers it registered were never taken off: one leak
+/// each time the window opened (ConjurePluginKit's host-check, `leaks`).
+fn detach_sublayers(view: &NSView) {
+    // SAFETY: CALayer's own calls on the view's layer, on the main thread. `sublayers` returns a
+    // copy, so taking them off while going through it is safe.
+    unsafe {
+        let layer: Option<Retained<AnyObject>> = msg_send![view, layer];
+        let Some(layer) = layer else { return };
+        let sublayers: Option<Retained<AnyObject>> = msg_send![&*layer, sublayers];
+        let Some(sublayers) = sublayers else { return };
+        let count: usize = msg_send![&*sublayers, count];
+        for i in 0..count {
+            let sublayer: Retained<AnyObject> = msg_send![&*sublayers, objectAtIndex: i];
+            let () = msg_send![&*sublayer, removeFromSuperlayer];
+        }
+    }
+}
+
 /// Adds the view's own tracking area if it has none, and touches no other.
 fn ensure_own_tracking_area(view: &NSView) {
     let own = view.trackingAreas().iter().any(|area| {
-        // SAFETY: reading the area's owner.
-        let owner = unsafe { area.owner() };
+        let owner = area.owner();
         owner.is_some_and(|o| core::ptr::eq(Retained::as_ptr(&o).cast::<u8>(), (view as *const NSView).cast::<u8>()))
     });
     if !own {
