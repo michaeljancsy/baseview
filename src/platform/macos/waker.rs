@@ -21,6 +21,13 @@ impl WindowWaker {
         self.view.use_on_main_thread_after(duration, |view| {
             let Some(view) = view.load() else { return };
             let Some(view) = view.inner() else { return };
+            // Ask for the frame the way the window context does, by setting the request as well
+            // as restarting the display link. Restarting it alone is undone at the end of the frame
+            // in progress, which pauses the link again when no request is set: a GUI that asks
+            // for its next frame from inside a frame (egui does, through this waker) then got no
+            // more frames until an input event set the request, so a window stayed blank or stale
+            // until the pointer moved (ConjurePluginKit request 39, REAPER and others).
+            view.state.redraw_requested.set(true);
             view.set_next_frame_needed(true);
         })
     }
