@@ -89,6 +89,11 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
             sel!(scrollWheel:),
             scroll_wheel::<V> as extern "C-unwind" fn(_, _, _) -> _,
         );
+        // Trackpad pinch. Upstream has no handler, so a pinch produces no events at all.
+        class.add_method(
+            sel!(magnifyWithEvent:),
+            magnify::<V> as extern "C-unwind" fn(_, _, _) -> _,
+        );
 
         class.add_method(
             sel!(viewDidChangeBackingProperties),
@@ -251,6 +256,12 @@ extern "C-unwind" fn scroll_wheel<V: ViewImpl>(this: &View<V>, sel: Sel, event: 
     event_log::log(this, event_log::name(sel), Some(event));
     let Some(inner) = this.inner_ref() else { return };
     V::scroll_wheel(inner, event);
+}
+
+extern "C-unwind" fn magnify<V: ViewImpl>(this: &View<V>, sel: Sel, event: &NSEvent) {
+    event_log::log(this, event_log::name(sel), Some(event));
+    let Some(inner) = this.inner_ref() else { return };
+    V::magnify(inner, event);
 }
 
 extern "C-unwind" fn dragging_entered<V: ViewImpl>(

@@ -177,6 +177,7 @@ pub trait ViewImpl: Sized {
     fn update_tracking_areas(this: ViewRef<Self>);
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent);
     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent);
+    fn magnify(this: ViewRef<Self>, event: &NSEvent);
     fn dragging_entered(
         this: ViewRef<Self>, sender: Option<&ProtocolObject<dyn NSDraggingInfo>>,
     ) -> NSDragOperation;

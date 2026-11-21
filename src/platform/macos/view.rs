@@ -556,6 +556,23 @@ impl ViewImpl for BaseviewView {
         );
     }
 
+    /// A trackpad pinch, as a precise scroll with Control held, which GUI toolkits read as zoom
+    /// (egui: Control-scroll zooms by exp(delta / 200), so 200 x the magnification gives the native
+    /// 1 + magnification per event, compounded over the gesture). baseview has no pinch event of its
+    /// own, so this needs no new event type. The event's real modifiers ride along.
+    fn magnify(this: ViewRef<Self>, event: &NSEvent) {
+        let magnification = event.magnification() as f32;
+        let mut modifiers = make_modifiers(event.modifierFlags());
+        modifiers.insert(keyboard_types::Modifiers::CONTROL);
+        Self::trigger_event(
+            this,
+            Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Pixels { x: 0.0, y: 200.0 * magnification },
+                modifiers,
+            }),
+        );
+    }
+
     fn dragging_entered(
         this: ViewRef<Self>, sender: Option<&ProtocolObject<dyn NSDraggingInfo>>,
     ) -> NSDragOperation {
