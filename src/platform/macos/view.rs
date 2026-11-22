@@ -316,10 +316,14 @@ impl BaseviewView {
 
     /// Trigger the event immediately and return the event status.
     fn trigger_event(this: ViewRef<Self>, event: Event) -> EventStatus {
+        // Input that can finish something: a release, a key, or anything while a button is held.
+        // Pointer moves and the wheel over a covered window don't (ConjurePluginKit request 66).
+        let finishes = matches!(event, Event::Mouse(ButtonReleased { .. }) | Event::Keyboard(_))
+            || NSEvent::pressedMouseButtons() != 0;
         let status =
             this.window_handler.use_handler(|h| h.on_event(event)).unwrap_or(EventStatus::Ignored);
-        if !this.window_visible.get() {
-            // Input reached a hidden window (a release after a drag that began before it was
+        if finishes && !this.window_visible.get() {
+            // It reached a hidden window (a release after a drag that began before the window was
             // covered): one more frame, so the handler sees it (ConjurePluginKit request 66).
             this.hidden_frame_drawn.set(false);
             Self::draw_last_hidden_frame_soon(this);
