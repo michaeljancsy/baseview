@@ -6,7 +6,7 @@ use objc2::{msg_send, sel, Encoding, Message, RefEncode};
 use objc2_app_kit::{NSDragOperation, NSDraggingInfo, NSEvent, NSView, NSWindow};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes};
-use objc2_quartz_core::CADisplayLink;
+use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use raw_window_handle::{AppKitWindowHandle, WindowHandle};
 use std::ffi::{c_void, CStr};
 use std::marker::PhantomData;
@@ -17,6 +17,9 @@ mod implementation;
 
 /// Name of the field used to store the `WindowState` pointer.
 const BASEVIEW_STATE_IVAR: &CStr = c"baseview_state";
+
+/// The most frames a second a view draws, whatever its screen's rate.
+pub const MAX_FRAMES_PER_SECOND: f32 = 60.0;
 
 #[repr(C)]
 pub struct View<V> {
@@ -124,6 +127,15 @@ impl<V: ViewImpl> View<V> {
     pub fn setup_display_link(&self) -> Retained<CADisplayLink> {
         let display_link =
             unsafe { self.displayLinkWithTarget_selector(self, sel![displayLinkFired:]) };
+
+        // At most 60 frames a second. A view's display link follows its screen, so on a 120 Hz
+        // (ProMotion) screen a window that asks for a frame every frame drew 120 a second, about
+        // twice the old 15 ms timer's rate, for no visible gain in a plug-in's window.
+        display_link.setPreferredFrameRateRange(CAFrameRateRange {
+            minimum: MAX_FRAMES_PER_SECOND / 2.0,
+            maximum: MAX_FRAMES_PER_SECOND,
+            preferred: MAX_FRAMES_PER_SECOND,
+        });
 
         let run_loop = NSRunLoop::currentRunLoop();
 
