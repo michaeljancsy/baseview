@@ -28,7 +28,8 @@ impl WindowWaker {
             // more frames until an input event set the request, so a window stayed blank or stale
             // until the pointer moved (ConjurePluginKit request 39, REAPER and others).
             view.state.redraw_requested.set(true);
-            // Whether the window is visible, as now (ConjurePluginKit request 66).
+            // Read the window's visibility again, so a stale reading can't hold back this frame
+            // (ConjurePluginKit request 66).
             view.refresh_window_visible(&ns_view);
             view.set_next_frame_needed(true);
         })

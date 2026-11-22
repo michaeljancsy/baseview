@@ -79,8 +79,13 @@ pub(crate) struct BaseviewView {
     display_link: OnceCell<Retained<CADisplayLink>>,
     display_link_started: Cell<bool>,
     /// Whether the view's window is at least partly visible, as macOS last said. While it isn't,
-    /// the display link stays paused and no frames are drawn.
+    /// the display link stays paused and no frames are drawn, after one last frame
+    /// (ConjurePluginKit request 66).
     window_visible: Cell<bool>,
+    /// The last frame since the window was last seen hidden has been drawn. It lets the handler
+    /// finish what a frame finishes (the kit's window closes an open scroll-wheel change with the
+    /// host there) before frames stop.
+    hidden_frame_drawn: Cell<bool>,
 
     host: Host,
     pub(crate) cursor_manager: CursorManager,
@@ -113,6 +118,7 @@ impl BaseviewView {
             display_link: OnceCell::new(),
             display_link_started: false.into(),
             window_visible: true.into(),
+            hidden_frame_drawn: false.into(),
             window_handler: WindowHandlerContainer::new(),
             notification_center_observer: None.into(),
             parenting: ViewParentingType::Uninitialized.into(),
@@ -199,10 +205,11 @@ impl BaseviewView {
         this.window_handler.use_handler(|h| h.poll());
     }
 
-    /// Starts or pauses the display link. While the window isn't visible it stays paused: a frame
-    /// asked for then is drawn when the window becomes visible again (`window_visibility_changed`).
+    /// Starts or pauses the display link. While the window isn't visible it stays paused, once the
+    /// last frame since it was hidden has been drawn: a frame asked for then is drawn when the
+    /// window becomes visible again (`window_visibility_changed`; ConjurePluginKit request 66).
     pub fn set_next_frame_needed(&self, needed: bool) {
-        let needed = needed && self.window_visible.get();
+        let needed = needed && (self.window_visible.get() || !self.hidden_frame_drawn.get());
         if self.display_link_started.get() == needed {
             return;
         };
@@ -320,26 +327,31 @@ impl BaseviewView {
             .window()
             .is_none_or(|w| w.occlusionState().contains(NSWindowOcclusionState::Visible));
         self.window_visible.set(visible);
+        if visible {
+            self.hidden_frame_drawn.set(false);
+        }
         visible
     }
 
-    /// The window became visible or stopped being visible: draw a frame on becoming visible, so it
-    /// shows the current state, and go on from there as requests come.
+    /// The window became visible or stopped being visible. Either way a frame comes next: on
+    /// becoming visible, so the window shows the current state, and frames go on from there as
+    /// requests come; on becoming hidden, the last one before frames stop.
     fn window_visibility_changed(this: ViewRef<Self>) {
-        if this.refresh_window_visible(this.view) {
-            this.state.redraw_requested.set(true);
-            this.set_next_frame_needed(true);
-        } else {
-            this.set_next_frame_needed(false);
-        }
+        this.refresh_window_visible(this.view);
+        this.state.redraw_requested.set(true);
+        this.set_next_frame_needed(true);
     }
 
     fn trigger_frame(this: ViewRef<Self>) {
         if !this.refresh_window_visible(this.view) {
-            // Hidden since the link last fired: keep the request for when it's visible again.
-            this.state.redraw_requested.set(true);
-            this.set_next_frame_needed(false);
-            return;
+            if this.hidden_frame_drawn.get() {
+                // Hidden, and its last frame drawn: keep the request for when it's visible again.
+                this.state.redraw_requested.set(true);
+                this.set_next_frame_needed(false);
+                return;
+            }
+            // The last frame while hidden: drawn as any other (nothing reaches the screen).
+            this.hidden_frame_drawn.set(true);
         }
         let result = this.window_handler.use_handler(|h| {
             this.state.redraw_requested.set(false);
@@ -546,6 +558,20 @@ impl ViewImpl for BaseviewView {
     }
 
     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>) {
+        // After the move the window's visibility is the new window's, which sends no notice when
+        // it doesn't change: read it now, and draw a frame there (ConjurePluginKit request 66). A
+        // view leaving its window draws nothing.
+        let visible = new_window
+            .is_none_or(|w| w.occlusionState().contains(NSWindowOcclusionState::Visible));
+        this.window_visible.set(visible);
+        if visible {
+            this.hidden_frame_drawn.set(false);
+        }
+        if new_window.is_some() {
+            this.state.redraw_requested.set(true);
+            this.set_next_frame_needed(true);
+        }
+
         // The view's own tracking area follows its visible rectangle by itself
         // (`InVisibleRect`), so leaving a window needs nothing. Only the view's own area is ever
         // touched: hosts add tracking areas to the view too, and taking out the first one in the

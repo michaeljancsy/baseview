@@ -14,8 +14,9 @@ pub struct NotificationCenterObserver {
 }
 
 impl NotificationCenterObserver {
-    /// A window becoming or ceasing to be key, and a window's visibility changing (ConjurePluginKit:
-    /// the view draws no frames while its window isn't visible).
+    /// A window becoming or ceasing to be key, and a window's visibility changing (ConjurePluginKit
+    /// request 66: the view draws no frames while its window isn't visible). The name is upstream's,
+    /// kept so the change against upstream stays small.
     pub fn register_window_key_change(handler: impl Fn(&NSNotification) + 'static) -> Self {
         let notification_center = NSNotificationCenter::defaultCenter();
 
