@@ -94,6 +94,8 @@ pub(crate) struct BaseviewView {
     /// and when the window last became visible, until its first frame after that.
     frame_log: Cell<(Option<Instant>, u32, u32, Duration)>,
     shown_at: Cell<Option<Instant>>,
+    /// Display-link firings since the last log line, for the same log.
+    link_firings: Cell<u32>,
 
     host: Host,
     pub(crate) cursor_manager: CursorManager,
@@ -130,6 +132,7 @@ impl BaseviewView {
             hidden_frame_queued: false.into(),
             frame_log: Cell::new((None, 0, 0, Duration::ZERO)),
             shown_at: None.into(),
+            link_firings: 0.into(),
             window_handler: WindowHandlerContainer::new(),
             notification_center_observer: None.into(),
             parenting: ViewParentingType::Uninitialized.into(),
@@ -423,8 +426,8 @@ impl BaseviewView {
         if secs >= 1.0 {
             let each = if frames > 0 { time.as_secs_f64() * 1000.0 / frames as f64 } else { 0.0 };
             let line = format!(
-                "frames: {:.0} a second drawn, {:.0} skipped while hidden, {each:.2} ms each; visible {}",
-                frames as f64 / secs, skipped as f64 / secs, this.window_visible.get()
+                "frames: {:.0} a second drawn, {:.0} display-link firings, {:.0} skipped while hidden, {each:.2} ms each; visible {}",
+                frames as f64 / secs, this.link_firings.replace(0) as f64 / secs, skipped as f64 / secs, this.window_visible.get()
             );
             event_log::log(this.view, &line, None);
             this.frame_log.set((Some(Instant::now()), 0, 0, Duration::ZERO));
@@ -610,6 +613,9 @@ impl ViewImpl for BaseviewView {
     }
 
     fn display_link_fired(this: ViewRef<Self>, _sender: &CADisplayLink) {
+        if event_log::on() {
+            this.link_firings.set(this.link_firings.get() + 1);
+        }
         Self::trigger_frame(this);
     }
 

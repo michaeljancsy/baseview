@@ -31,8 +31,9 @@ pub fn on() -> bool {
 
 #[cfg(feature = "window-log-system")]
 extern "C" {
-    /// Foundation's NSLog: writes to macOS's unified log (and standard error), unredacted.
-    fn NSLog(format: *const objc2::runtime::AnyObject, ...);
+    /// os_log.c: one line to macOS's unified log, subsystem com.michaeljancsy.conjurekit.window,
+    /// marked public.
+    fn baseview_window_os_log(line: *const std::ffi::c_char);
 }
 
 /// Writes `line` where the log goes: the unified log in a `window-log-system` build, the file
@@ -40,15 +41,10 @@ extern "C" {
 fn write(line: &str) {
     #[cfg(feature = "window-log-system")]
     {
-        let format = objc2_foundation::NSString::from_str("ConjureKit window %@");
-        let text = objc2_foundation::NSString::from_str(line);
-        // SAFETY: a format with one object placeholder, given one NSString.
-        unsafe {
-            NSLog(
-                objc2::rc::Retained::as_ptr(&format).cast(),
-                objc2::rc::Retained::as_ptr(&text) as *const objc2::runtime::AnyObject,
-            )
-        };
+        if let Ok(line) = std::ffi::CString::new(line) {
+            // SAFETY: a NUL-terminated string that outlives the call.
+            unsafe { baseview_window_os_log(line.as_ptr()) };
+        }
         return;
     }
     #[allow(unreachable_code)]
