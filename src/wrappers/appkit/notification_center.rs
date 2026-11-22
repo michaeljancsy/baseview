@@ -1,16 +1,21 @@
 use block2::RcBlock;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
-use objc2_app_kit::{NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification};
+use objc2_app_kit::{
+    NSWindowDidBecomeKeyNotification, NSWindowDidChangeOcclusionStateNotification,
+    NSWindowDidResignKeyNotification,
+};
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 use std::ptr::NonNull;
 
 pub struct NotificationCenterObserver {
     notification_center: Weak<NSNotificationCenter>,
-    handlers: [Retained<ProtocolObject<dyn NSObjectProtocol>>; 2],
+    handlers: [Retained<ProtocolObject<dyn NSObjectProtocol>>; 3],
 }
 
 impl NotificationCenterObserver {
+    /// A window becoming or ceasing to be key, and a window's visibility changing (ConjurePluginKit:
+    /// the view draws no frames while its window isn't visible).
     pub fn register_window_key_change(handler: impl Fn(&NSNotification) + 'static) -> Self {
         let notification_center = NSNotificationCenter::defaultCenter();
 
@@ -31,6 +36,12 @@ impl NotificationCenterObserver {
                 ),
                 notification_center.addObserverForName_object_queue_usingBlock(
                     Some(NSWindowDidResignKeyNotification),
+                    None,
+                    None,
+                    &block,
+                ),
+                notification_center.addObserverForName_object_queue_usingBlock(
+                    Some(NSWindowDidChangeOcclusionStateNotification),
                     None,
                     None,
                     &block,

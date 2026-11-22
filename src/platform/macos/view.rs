@@ -22,7 +22,8 @@ use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{msg_send, AllocAnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::{
     NSApplication, NSDragOperation, NSDraggingInfo, NSEvent, NSFilenamesPboardType, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowDidChangeOcclusionStateNotification,
+    NSWindowOcclusionState,
 };
 use objc2_foundation::{NSArray, NSNotification, NSPoint, NSPointInRect, NSRect, NSSize, NSString};
 use objc2_quartz_core::CADisplayLink;
@@ -77,6 +78,9 @@ pub(crate) struct BaseviewView {
     pub(crate) lifetime_tied_to_app: Cell<Option<Weak<NSApplication>>>,
     display_link: OnceCell<Retained<CADisplayLink>>,
     display_link_started: Cell<bool>,
+    /// Whether the view's window is at least partly visible, as macOS last said. While it isn't,
+    /// the display link stays paused and no frames are drawn.
+    window_visible: Cell<bool>,
 
     host: Host,
     pub(crate) cursor_manager: CursorManager,
@@ -108,6 +112,7 @@ impl BaseviewView {
             keyboard_state: KeyboardState::new(),
             display_link: OnceCell::new(),
             display_link_started: false.into(),
+            window_visible: true.into(),
             window_handler: WindowHandlerContainer::new(),
             notification_center_observer: None.into(),
             parenting: ViewParentingType::Uninitialized.into(),
@@ -194,7 +199,10 @@ impl BaseviewView {
         this.window_handler.use_handler(|h| h.poll());
     }
 
+    /// Starts or pauses the display link. While the window isn't visible it stays paused: a frame
+    /// asked for then is drawn when the window becomes visible again (`window_visibility_changed`).
     pub fn set_next_frame_needed(&self, needed: bool) {
+        let needed = needed && self.window_visible.get();
         if self.display_link_started.get() == needed {
             return;
         };
@@ -300,7 +308,39 @@ impl BaseviewView {
         this.window_handler.use_handler(|h| h.on_event(event)).unwrap_or(EventStatus::Ignored)
     }
 
+    /// Reads whether `view`'s window is at least partly visible, and keeps it for
+    /// `set_next_frame_needed`. A view in no window counts as visible, as before.
+    ///
+    /// ConjurePluginKit: the display link goes on firing at the screen's rate while a window is
+    /// covered, minimized or on another desktop, and every frame was laid out, turned into
+    /// triangles and uploaded for nothing (request 66: 120 frames a second, about 27 % of a core,
+    /// for a plug-in window nobody could see).
+    pub(crate) fn refresh_window_visible(&self, view: &NSView) -> bool {
+        let visible = view
+            .window()
+            .is_none_or(|w| w.occlusionState().contains(NSWindowOcclusionState::Visible));
+        self.window_visible.set(visible);
+        visible
+    }
+
+    /// The window became visible or stopped being visible: draw a frame on becoming visible, so it
+    /// shows the current state, and go on from there as requests come.
+    fn window_visibility_changed(this: ViewRef<Self>) {
+        if this.refresh_window_visible(this.view) {
+            this.state.redraw_requested.set(true);
+            this.set_next_frame_needed(true);
+        } else {
+            this.set_next_frame_needed(false);
+        }
+    }
+
     fn trigger_frame(this: ViewRef<Self>) {
+        if !this.refresh_window_visible(this.view) {
+            // Hidden since the link last fired: keep the request for when it's visible again.
+            this.state.redraw_requested.set(true);
+            this.set_next_frame_needed(false);
+            return;
+        }
         let result = this.window_handler.use_handler(|h| {
             this.state.redraw_requested.set(false);
             h.draw()?;
@@ -428,6 +468,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn draw_rect(this: ViewRef<Self>, _rect: NSRect) {
+        this.refresh_window_visible(this.view);
         this.window_handler.use_handler(|h| {
             let mut rects_ptr = null();
             let mut rects_count = 0;
@@ -649,6 +690,11 @@ impl ViewImpl for BaseviewView {
         // Only trigger focus events if the NSWindow that's being notified about is our window,
         // and if the window's first responder is our NSView.
         if window != notification_object {
+            return;
+        }
+
+        if *notification.name() == *unsafe { NSWindowDidChangeOcclusionStateNotification } {
+            Self::window_visibility_changed(this);
             return;
         }
 
