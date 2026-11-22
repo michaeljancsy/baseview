@@ -70,6 +70,18 @@ impl<T: Message + 'static> MainThreadBoundWeak<T> {
         let _ = DispatchQueue::main().after(time, handler);
     }
 
+    /// Runs `handler` on the main thread after what it is doing now, never inline: for work that
+    /// must not run inside the caller (ConjurePluginKit request 66).
+    pub fn use_on_main_thread_later(&self, handler: impl FnOnce(Weak<T>) + Send + 'static) {
+        let handler = {
+            let handle = MTWrapper(Weak::clone(&self.0));
+            let handler = MTWrapper::new_handler(handler);
+            move || handler(handle)
+        };
+
+        DispatchQueue::main().exec_async(handler);
+    }
+
     pub fn use_on_main_thread(&self, handler: impl FnOnce(Weak<T>) + Send + 'static) {
         if MainThreadMarker::new().is_some() {
             handler(Weak::clone(&self.0));
