@@ -1,10 +1,12 @@
 //! A diagnostic log of the AppKit calls baseview's view receives, for finding where a host loses
 //! an event (ConjurePluginKit request 47). Off unless the file `~/Library/Logs/ConjureKit-window.log`
 //! exists when the view first logs: create it (for example with `touch`) before starting the host,
-//! then read it. Main thread only, as every AppKit call to a view is.
+//! then read it. In a build with the `window-log-system` feature it is always on and goes to
+//! macOS's unified log instead (ConjurePluginKit request 66). The window's frame counts also go to
+//! the unified log at debug level in every build (ConjurePluginKit request 69). Main thread only,
+//! as every AppKit call to a view is.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,12 +66,14 @@ fn write(line: &str) {
             // SAFETY: a NUL-terminated string that outlives the call.
             unsafe { baseview_window_os_log(line.as_ptr()) };
         }
-        return;
     }
-    #[allow(unreachable_code)]
-    if let Some(file) = file() {
-        if let Ok(mut file) = file.lock() {
-            let _ = writeln!(file, "{line}");
+    #[cfg(not(feature = "window-log-system"))]
+    {
+        use std::io::Write;
+        if let Some(file) = file() {
+            if let Ok(mut file) = file.lock() {
+                let _ = writeln!(file, "{line}");
+            }
         }
     }
 }

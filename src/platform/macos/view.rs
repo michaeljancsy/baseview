@@ -426,7 +426,7 @@ impl BaseviewView {
         if secs >= 1.0 {
             let each = if frames > 0 { time.as_secs_f64() * 1000.0 / frames as f64 } else { 0.0 };
             // The counts themselves and their interval, so a reader can add up any stretch of time;
-            // a window that draws nothing writes nothing, which reads as no frames (request 69).
+            // a window that draws nothing writes nothing, which reads as no frames (ConjurePluginKit request 69).
             let line = format!(
                 "frames {frames} in {secs:.2} s, {} display-link firings, {skipped} skipped while hidden, {each:.2} ms each; visible {}",
                 this.link_firings.replace(0), this.window_visible.get()
@@ -445,7 +445,7 @@ impl BaseviewView {
         if !this.refresh_window_visible(this.view) {
             if this.hidden_frame_drawn.get() {
                 // Counted always: once a second the count goes to the window log if it is on, and
-                // to the unified log's debug level if anything listens (request 69).
+                // to the unified log's debug level if anything listens (ConjurePluginKit request 69).
                 Self::log_frame(this, None);
                 // Hidden, and its last frame drawn: keep the request for when it's visible again.
                 this.state.redraw_requested.set(true);
