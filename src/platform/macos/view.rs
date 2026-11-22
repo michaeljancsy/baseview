@@ -30,7 +30,7 @@ use objc2_quartz_core::CADisplayLink;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::ptr::null;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub enum ViewParentingType {
     Parented { parent_view: Weak<NSView> },
@@ -89,6 +89,11 @@ pub(crate) struct BaseviewView {
     hidden_frame_drawn: Cell<bool>,
     /// That last frame is on its way through the main queue.
     hidden_frame_queued: Cell<bool>,
+    /// For the off-by-default window log only (ConjurePluginKit request 66): frames drawn, display
+    /// link firings skipped because the window was hidden, and time spent drawing, since `since`;
+    /// and when the window last became visible, until its first frame after that.
+    frame_log: Cell<(Option<Instant>, u32, u32, Duration)>,
+    shown_at: Cell<Option<Instant>>,
 
     host: Host,
     pub(crate) cursor_manager: CursorManager,
@@ -123,6 +128,8 @@ impl BaseviewView {
             window_visible: true.into(),
             hidden_frame_drawn: false.into(),
             hidden_frame_queued: false.into(),
+            frame_log: Cell::new((None, 0, 0, Duration::ZERO)),
+            shown_at: None.into(),
             window_handler: WindowHandlerContainer::new(),
             notification_center_observer: None.into(),
             parenting: ViewParentingType::Uninitialized.into(),
@@ -354,6 +361,12 @@ impl BaseviewView {
     /// requests come; on becoming hidden, the last one before frames stop.
     fn window_visibility_changed(this: ViewRef<Self>) {
         let visible = this.refresh_window_visible(this.view);
+        if event_log::on() {
+            Self::log_window(this, if visible { "visibility notice: visible" } else { "visibility notice: hidden" });
+            if visible {
+                this.shown_at.set(Some(Instant::now()));
+            }
+        }
         this.state.redraw_requested.set(true);
         if visible {
             this.set_next_frame_needed(true);
@@ -382,9 +395,51 @@ impl BaseviewView {
         });
     }
 
+    /// A window-log line with the window's class and what macOS says of its visibility.
+    fn log_window(this: ViewRef<Self>, what: &str) {
+        let window = this.view.window();
+        let class = window.as_deref().map_or("none", |w| w.class().name().to_str().unwrap_or("?"));
+        let occlusion = window.as_deref().map_or(0, |w| w.occlusionState().0);
+        event_log::log(this.view, &format!("{what}; window class {class}, occlusionState {occlusion:#x}"), None);
+    }
+
+    /// Counts a frame drawn, or a firing skipped while hidden, and once a second writes the counts
+    /// to the off-by-default window log (ConjurePluginKit request 66).
+    fn log_frame(this: ViewRef<Self>, drawn: Option<Duration>) {
+        let (since, mut frames, mut skipped, mut time) = this.frame_log.get();
+        let since = since.unwrap_or_else(Instant::now);
+        match drawn {
+            Some(took) => {
+                frames += 1;
+                time += took;
+                if let Some(shown) = this.shown_at.take() {
+                    let ms = shown.elapsed().as_secs_f64() * 1000.0;
+                    event_log::log(this.view, &format!("first frame {ms:.0} ms after becoming visible"), None);
+                }
+            }
+            None => skipped += 1,
+        }
+        let secs = since.elapsed().as_secs_f64();
+        if secs >= 1.0 {
+            let each = if frames > 0 { time.as_secs_f64() * 1000.0 / frames as f64 } else { 0.0 };
+            let line = format!(
+                "frames: {:.0} a second drawn, {:.0} skipped while hidden, {each:.2} ms each; visible {}",
+                frames as f64 / secs, skipped as f64 / secs, this.window_visible.get()
+            );
+            event_log::log(this.view, &line, None);
+            this.frame_log.set((Some(Instant::now()), 0, 0, Duration::ZERO));
+        } else {
+            this.frame_log.set((Some(since), frames, skipped, time));
+        }
+    }
+
     fn trigger_frame(this: ViewRef<Self>) {
+        let logging = event_log::on();
         if !this.refresh_window_visible(this.view) {
             if this.hidden_frame_drawn.get() {
+                if logging {
+                    Self::log_frame(this, None);
+                }
                 // Hidden, and its last frame drawn: keep the request for when it's visible again.
                 this.state.redraw_requested.set(true);
                 this.set_next_frame_needed(false);
@@ -393,12 +448,16 @@ impl BaseviewView {
             // The last frame while hidden: drawn as any other (nothing reaches the screen).
             this.hidden_frame_drawn.set(true);
         }
+        let started = Instant::now();
         let result = this.window_handler.use_handler(|h| {
             this.state.redraw_requested.set(false);
             h.draw()?;
 
             Ok::<(), HandlerError>(())
         });
+        if logging && result.is_some() {
+            Self::log_frame(this, Some(started.elapsed()));
+        }
 
         let Some(result) = result else { return };
 
@@ -603,6 +662,11 @@ impl ViewImpl for BaseviewView {
         // view leaving its window draws nothing.
         let visible = new_window
             .is_none_or(|w| w.occlusionState().contains(NSWindowOcclusionState::Visible));
+        if event_log::on() {
+            let class = new_window.map_or("none", |w| w.class().name().to_str().unwrap_or("?"));
+            let occlusion = new_window.map_or(0, |w| w.occlusionState().0);
+            event_log::log(this.view, &format!("moves to window class {class}, occlusionState {occlusion:#x}"), None);
+        }
         this.window_visible.set(visible);
         if visible {
             this.hidden_frame_drawn.set(false);
