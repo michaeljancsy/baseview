@@ -29,11 +29,30 @@ pub fn on() -> bool {
     cfg!(feature = "window-log-system") || file().is_some()
 }
 
-#[cfg(feature = "window-log-system")]
 extern "C" {
     /// os_log.c: one line to macOS's unified log, subsystem com.michaeljancsy.conjurekit.window,
     /// marked public.
+    #[cfg(feature = "window-log-system")]
     fn baseview_window_os_log(line: *const std::ffi::c_char);
+    /// os_log.c: whether anything is listening for the "frames" debug lines.
+    fn baseview_frames_log_wanted() -> bool;
+    /// os_log.c: one "frames" debug line.
+    fn baseview_frames_log(line: *const std::ffi::c_char);
+}
+
+/// ConjurePluginKit request 69: whether anything is listening for the window's frame counts.
+pub fn frames_wanted() -> bool {
+    // SAFETY: a plain query of the unified log.
+    unsafe { baseview_frames_log_wanted() }
+}
+
+/// ConjurePluginKit request 69: one frame-count line, at debug level, which costs nothing unless
+/// something is listening (`log stream --level debug`), in every build.
+pub fn frames(line: &str) {
+    if let Ok(line) = std::ffi::CString::new(line) {
+        // SAFETY: a NUL-terminated string that outlives the call.
+        unsafe { baseview_frames_log(line.as_ptr()) };
+    }
 }
 
 /// Writes `line` where the log goes: the unified log in a `window-log-system` build, the file

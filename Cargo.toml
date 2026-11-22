@@ -27,8 +27,8 @@ default = []
 # ConjurePluginKit request 66, for profiling builds only, never by default: the window log goes to
 # macOS's unified log with os_log (subsystem com.michaeljancsy.conjurekit.window, every value
 # public, so not redacted), always on, for a sandboxed AUv3 extension that can't be given the log
-# file. Builds src/wrappers/appkit/os_log.c with the C compiler.
-window-log-system = ["dep:cc"]
+# file.
+window-log-system = []
 opengl = [
     "windows/Win32_Graphics_OpenGL",
     "windows-sys/Win32_Graphics_OpenGL",
@@ -39,7 +39,8 @@ opengl = [
 ]
 
 [build-dependencies]
-cc = { version = "1", optional = true }
+# ConjurePluginKit: builds src/wrappers/appkit/os_log.c on macOS (requests 66 and 69).
+cc = "1"
 
 [dependencies]
 keyboard-types = { version = "0.8.3" }

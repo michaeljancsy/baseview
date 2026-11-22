@@ -89,12 +89,12 @@ pub(crate) struct BaseviewView {
     hidden_frame_drawn: Cell<bool>,
     /// That last frame is on its way through the main queue.
     hidden_frame_queued: Cell<bool>,
-    /// For the off-by-default window log only (ConjurePluginKit request 66): frames drawn, display
-    /// link firings skipped because the window was hidden, and time spent drawing, since `since`;
-    /// and when the window last became visible, until its first frame after that.
+    /// For the frame counts (ConjurePluginKit requests 66 and 69): frames drawn, display-link
+    /// firings skipped because the window was hidden, and time spent drawing, since `since`; and
+    /// when the window last became visible, until its first frame after that.
     frame_log: Cell<(Option<Instant>, u32, u32, Duration)>,
     shown_at: Cell<Option<Instant>>,
-    /// Display-link firings since the last log line, for the same log.
+    /// Display-link firings since the last frame-count line.
     link_firings: Cell<u32>,
 
     host: Host,
@@ -425,11 +425,16 @@ impl BaseviewView {
         let secs = since.elapsed().as_secs_f64();
         if secs >= 1.0 {
             let each = if frames > 0 { time.as_secs_f64() * 1000.0 / frames as f64 } else { 0.0 };
+            // The counts themselves and their interval, so a reader can add up any stretch of time;
+            // a window that draws nothing writes nothing, which reads as no frames (request 69).
             let line = format!(
-                "frames: {:.0} a second drawn, {:.0} display-link firings, {:.0} skipped while hidden, {each:.2} ms each; visible {}",
-                frames as f64 / secs, this.link_firings.replace(0) as f64 / secs, skipped as f64 / secs, this.window_visible.get()
+                "frames {frames} in {secs:.2} s, {} display-link firings, {skipped} skipped while hidden, {each:.2} ms each; visible {}",
+                this.link_firings.replace(0), this.window_visible.get()
             );
             event_log::log(this.view, &line, None);
+            if event_log::frames_wanted() {
+                event_log::frames(&line);
+            }
             this.frame_log.set((Some(Instant::now()), 0, 0, Duration::ZERO));
         } else {
             this.frame_log.set((Some(since), frames, skipped, time));
@@ -437,12 +442,11 @@ impl BaseviewView {
     }
 
     fn trigger_frame(this: ViewRef<Self>) {
-        let logging = event_log::on();
         if !this.refresh_window_visible(this.view) {
             if this.hidden_frame_drawn.get() {
-                if logging {
-                    Self::log_frame(this, None);
-                }
+                // Counted always: once a second the count goes to the window log if it is on, and
+                // to the unified log's debug level if anything listens (request 69).
+                Self::log_frame(this, None);
                 // Hidden, and its last frame drawn: keep the request for when it's visible again.
                 this.state.redraw_requested.set(true);
                 this.set_next_frame_needed(false);
@@ -458,7 +462,7 @@ impl BaseviewView {
 
             Ok::<(), HandlerError>(())
         });
-        if logging && result.is_some() {
+        if result.is_some() {
             Self::log_frame(this, Some(started.elapsed()));
         }
 
@@ -613,9 +617,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn display_link_fired(this: ViewRef<Self>, _sender: &CADisplayLink) {
-        if event_log::on() {
-            this.link_firings.set(this.link_firings.get() + 1);
-        }
+        this.link_firings.set(this.link_firings.get() + 1);
         Self::trigger_frame(this);
     }
 
