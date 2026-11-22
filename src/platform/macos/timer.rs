@@ -3,7 +3,7 @@ use crate::wrappers::appkit::View;
 use block2::RcBlock;
 use objc2::__framework_prelude::Retained;
 use objc2::rc::Weak;
-use objc2_foundation::NSTimer;
+use objc2_foundation::{NSRunLoop, NSRunLoopCommonModes, NSTimer};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::time::Duration;
@@ -65,6 +65,13 @@ fn create_timer(view: Weak<View<BaseviewView>>, duration: Duration) -> Retained<
         BaseviewView::trigger_timer(view, &handle);
     });
 
+    // ConjurePluginKit (request 68): added to the run loop's common modes, as the view's display
+    // link is, rather than the default mode alone that `scheduledTimer…` uses, so a timer keeps
+    // firing while the host runs a menu, a live resize or a modal dialog. egui-baseview's poll of a
+    // product's "something changed" flag rides on such a timer.
     // SAFETY: block does not need to be sendable
-    unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(interval, true, &block) }
+    let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(interval, true, &block) };
+    // SAFETY: the current run loop, on the main thread, which views and their timers live on.
+    unsafe { NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+    timer
 }
