@@ -26,7 +26,37 @@ fn file() -> Option<&'static Mutex<File>> {
 
 /// Whether the log is on.
 pub fn on() -> bool {
-    file().is_some()
+    cfg!(feature = "window-log-system") || file().is_some()
+}
+
+#[cfg(feature = "window-log-system")]
+extern "C" {
+    /// Foundation's NSLog: writes to macOS's unified log (and standard error), unredacted.
+    fn NSLog(format: *const objc2::runtime::AnyObject, ...);
+}
+
+/// Writes `line` where the log goes: the unified log in a `window-log-system` build, the file
+/// otherwise.
+fn write(line: &str) {
+    #[cfg(feature = "window-log-system")]
+    {
+        let format = objc2_foundation::NSString::from_str("ConjureKit window %@");
+        let text = objc2_foundation::NSString::from_str(line);
+        // SAFETY: a format with one object placeholder, given one NSString.
+        unsafe {
+            NSLog(
+                objc2::rc::Retained::as_ptr(&format).cast(),
+                objc2::rc::Retained::as_ptr(&text) as *const objc2::runtime::AnyObject,
+            )
+        };
+        return;
+    }
+    #[allow(unreachable_code)]
+    if let Some(file) = file() {
+        if let Ok(mut file) = file.lock() {
+            let _ = writeln!(file, "{line}");
+        }
+    }
 }
 
 /// A selector's name as the log writes it, without the trailing colon.
@@ -38,7 +68,9 @@ pub fn name(sel: Sel) -> &'static str {
 /// One line: the time, the view, its window, its frame, what happened, the buttons the system
 /// says are down, and for an event its type and position in the window.
 pub fn log(view: &NSView, what: &str, event: Option<&NSEvent>) {
-    let Some(file) = file() else { return };
+    if !on() {
+        return;
+    }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     let window = view.window();
     let window_ptr = window.as_deref().map_or(std::ptr::null(), |w| w as *const _);
@@ -52,9 +84,7 @@ pub fn log(view: &NSView, what: &str, event: Option<&NSEvent>) {
         let at = event.locationInWindow();
         line.push_str(&format!(" type {} at {:.0},{:.0}", event.r#type().0, at.x, at.y));
     }
-    if let Ok(mut file) = file.lock() {
-        let _ = writeln!(file, "{line}");
-    }
+    write(&line);
 }
 
 /// A call from one of the selectors that share the view's move handler: only the drags.

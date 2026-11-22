@@ -24,6 +24,10 @@ rust-version = "1.82"
 
 [features]
 default = []
+# ConjurePluginKit request 66, for profiling builds only, never by default: the window log goes to
+# macOS's unified log through NSLog (each line begins "ConjureKit window"), always on, for a
+# sandboxed AUv3 extension that can't be given the log file.
+window-log-system = []
 opengl = [
     "windows/Win32_Graphics_OpenGL",
     "windows-sys/Win32_Graphics_OpenGL",
