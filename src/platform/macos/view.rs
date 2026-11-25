@@ -989,18 +989,21 @@ impl ViewImpl for BaseviewView {
 }
 
 /// Takes every sublayer off the view's layer, once the handler, and with it whatever drew into
-/// the view, is gone. wgpu draws into a layer (raw-window-metal's) that it adds as a sublayer, and
-/// that layer observes the view's layer, stopping only when it is freed. Left attached, it is freed
-/// only after the view's layer, and the two observers it registered were never taken off: one leak
-/// each time the window opened (ConjurePluginKit's host-check, `leaks`).
+/// the view, is gone. Given the view, wgpu draws into a layer (raw-window-metal's) that it adds
+/// as a sublayer, and that layer observes the view's layer, stopping only when it is freed. Left
+/// attached, it is freed only after the view's layer, and the two observers it registered were
+/// never taken off: one leak each time the window opened (ConjurePluginKit's host-check, `leaks`).
+/// The kit's own layer (ConjurePluginKit request 87) observes nothing, and is taken off too.
 fn detach_sublayers(view: &NSView) {
-    // SAFETY: CALayer's own calls on the view's layer, on the main thread. `sublayers` returns a
-    // copy, so taking them off while going through it is safe.
+    // SAFETY: CALayer's own calls on the view's layer, on the main thread. `sublayers` is the
+    // layer's own list, which shrinks as each is taken off, so it is copied first (ConjurePluginKit
+    // request 88): with two or more, going through the list itself ended the host.
     unsafe {
         let layer: Option<Retained<AnyObject>> = msg_send![view, layer];
         let Some(layer) = layer else { return };
         let sublayers: Option<Retained<AnyObject>> = msg_send![&*layer, sublayers];
         let Some(sublayers) = sublayers else { return };
+        let sublayers: Retained<AnyObject> = msg_send![&*sublayers, copy];
         let count: usize = msg_send![&*sublayers, count];
         for i in 0..count {
             let sublayer: Retained<AnyObject> = msg_send![&*sublayers, objectAtIndex: i];

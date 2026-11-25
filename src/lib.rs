@@ -37,7 +37,7 @@ pub(crate) use tracing::*;
 mod utils;
 pub(crate) mod wrappers;
 
-/// ConjurePluginKit (requests 68 and 69): whether anything is listening for the window's "frames"
+/// ConjurePluginKit (request 69): whether anything is listening for the window's "frames"
 /// lines, at debug level in macOS's unified log (subsystem `com.michaeljancsy.conjurekit.window`).
 /// Always false elsewhere.
 pub fn frames_log_wanted() -> bool {
@@ -47,7 +47,7 @@ pub fn frames_log_wanted() -> bool {
     return false;
 }
 
-/// ConjurePluginKit (requests 68 and 69): one more "frames" line from the code that draws in the
+/// ConjurePluginKit (request 69): one more "frames" line from the code that draws in the
 /// window, such as why it drew, beside the window's own frame counts. Costs nothing unless
 /// something is listening; ask [`frames_log_wanted`] first to skip building the line. Does nothing
 /// elsewhere.
